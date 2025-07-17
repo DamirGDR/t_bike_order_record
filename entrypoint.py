@@ -73,7 +73,7 @@ def main():
     # engine_postgresql = sa.create_engine(url)
     # df_vni.to_sql("vni_total", engine_postgresql, if_exists="append", index=False)
     
-    print('t_bike_order_record UPDATED!')
+    print(''Added {x} records to t_bike_order_record in Postgres!'.format(x = df_fresh_t_bike_order_record_mysql.shape[0])')
 
 
 if __name__ == "__main__":
