@@ -43,12 +43,12 @@ def main():
     select_fresh_t_bike_order_record_mysql = '''
     SELECT 
     	NOW() AS add_time,
-    	t_bike_order_record.id, 
-    	t_bike_order_record.imei, 
-    	t_bike_order_record.order_id, 
-    	t_bike_order_record.`time`,
-    	t_bike_order_record.content, 
-    	t_bike_order_record.`from`
+    	IFNULL(t_bike_order_record.id,0) AS id, 
+    	IFNULL(t_bike_order_record.imei,0) AS imei, 
+    	IFNULL(t_bike_order_record.order_id,0) AS order_id, 
+    	IFNULL(t_bike_order_record.`time`,0) AS `time`,
+    	IFNULL(t_bike_order_record.content,0) AS content, 
+    	IFNULL(t_bike_order_record.`from`,0) AS `from`
     FROM shamri.t_bike_order_record
     WHERE 
     	t_bike_order_record.id > {max_id_postgres}
@@ -57,7 +57,7 @@ def main():
     df_fresh_t_bike_order_record_mysql = pd.read_sql(select_fresh_t_bike_order_record_mysql, engine_mysql)
 
     # Загрузка свежих данных t_bike_order_record в Postgres
-    df_fresh_t_bike_order_record_mysql.to_sql("t_bike_order_record", engine_postgresql, if_exists="append", index=False)
+    df_fresh_t_bike_order_record_mysql.replace('', '0').to_sql("t_bike_order_record", engine_postgresql, if_exists="append", index=False)
 
     
     print('Added {x} records to t_bike_order_record in Postgres!'.format(x = df_fresh_t_bike_order_record_mysql.shape[0]))
