@@ -37,7 +37,7 @@ def main():
     FROM damir.t_bike_order_record
     '''
     df_max_id_postgres = pd.read_sql(select_max_id_t_bike_order_record, engine_postgresql)
-    max_id_postgres = int(df_max_id_postgres.iloc[0])
+    max_id_postgres = int(df_max_id_postgres.iloc[0].iloc[0])
 
     # Выгрузка свежих данных из MYSQL
     select_fresh_t_bike_order_record_mysql = '''
