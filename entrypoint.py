@@ -223,7 +223,7 @@ def main():
 
     df_fresh_t_ride_event_log_mysql = pd.read_sql(select_fresh_t_ride_event_log_mysql, engine_mysql)
     df_fresh_t_ride_event_log_mysql.replace('', '0').to_sql("t_ride_event_log", engine_postgresql, if_exists="append", index=False)
-    print('Added {x} records to t_bike_use in Postgres!'.format(x = df_fresh_t_ride_event_log_mysql.shape[0]))
+    print('Added {x} records to t_ride_event_log in Postgres!'.format(x = df_fresh_t_ride_event_log_mysql.shape[0]))
 
     #   Обновление таблицы t_ride_event_log в Postgres. Конец
 
