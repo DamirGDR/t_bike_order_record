@@ -390,7 +390,7 @@ def main():
                         raw_table.detection_time
                         ) AS alarm_tab
                 LEFT JOIN damir.t_bike ON alarm_tab.imei = t_bike.imei
-                ORDER BY alarm_tab.detection_time DESC'''.format(max_id_alarms_1, max_id_alarms_1)
+                ORDER BY alarm_tab.detection_time ASC'''.format(max_id_alarms_1, max_id_alarms_1)
     df_fresh_alarms_1 = pd.read_sql(select_fresh_alarms_1, engine_postgresql)
     df_fresh_alarms_1.replace('', '0').to_sql("alarms_1", engine_postgresql, if_exists="append", index=False)
     print('Added {x} records to alarms_1 in Postgres!'.format(x=df_fresh_alarms_1.shape[0]))
@@ -428,7 +428,7 @@ def main():
             ride_status = 7
             AND prev_status = 7
             AND prev_prev_status = 7
-        ORDER BY to_timestamp(prev_rides.date) DESC
+        ORDER BY to_timestamp(prev_rides.date) ASC
     '''.format(max_id_alarms_2=max_id_alarms_2)
     df_fresh_alarms_2 = pd.read_sql(select_fresh_alarms_2, engine_postgresql)
     df_fresh_alarms_2.replace('', '0').to_sql("alarms_2", engine_postgresql, if_exists="append", index=False)
@@ -466,7 +466,7 @@ def main():
         WHERE t_bike_use_temp.ride_status = 3
             AND t_bike_use_temp.prev_status = 7
             AND t_bike_use_temp.prev_prev_status = 7
-        ORDER BY t_bike_use_temp.start_time DESC
+        ORDER BY t_bike_use_temp.start_time ASC
     '''.format(max_id_alarms_3=max_id_alarms_3)
     df_fresh_alarms_3 = pd.read_sql(select_fresh_alarms_3, engine_postgresql)
     df_fresh_alarms_3.replace('', '0').to_sql("alarms_3", engine_postgresql, if_exists="append", index=False)
@@ -502,7 +502,7 @@ def main():
                 AND t_ride_event_log.id > {max_id_alarms_4}
             ) AS raw
         WHERE raw.kolvo_otmen_prev_10_min >= 3
-        ORDER BY raw.created DESC
+        ORDER BY raw.created ASC
     '''.format(max_id_alarms_4=max_id_alarms_4)
     df_fresh_alarms_4 = pd.read_sql(select_fresh_alarms_4, engine_postgresql)
     df_fresh_alarms_4.replace('', '0').to_sql("alarms_4", engine_postgresql, if_exists="append", index=False)
