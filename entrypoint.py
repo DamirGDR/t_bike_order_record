@@ -435,7 +435,7 @@ def main():
     print('Added {x} records to alarms_2 in Postgres!'.format(x=df_fresh_alarms_2.shape[0]))
     #   Обновление таблицы alarms_2 в Postgres. Конец
 
-    #   Обновление таблицы alarms_2 в Postgres. Начало
+    #   Обновление таблицы alarms_3 в Postgres. Начало
     select_max_id_alarms_3 = '''
     SELECT 
         MAX(id)
@@ -471,7 +471,7 @@ def main():
     df_fresh_alarms_3 = pd.read_sql(select_fresh_alarms_3, engine_postgresql)
     df_fresh_alarms_3.replace('', '0').to_sql("alarms_3", engine_postgresql, if_exists="append", index=False)
     print('Added {x} records to alarms_3 in Postgres!'.format(x=df_fresh_alarms_3.shape[0]))
-    #   Обновление таблицы alarms_2 в Postgres. Конец
+    #   Обновление таблицы alarms_3 в Postgres. Конец
 
 
 if __name__ == "__main__":
