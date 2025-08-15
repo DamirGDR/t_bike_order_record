@@ -117,7 +117,7 @@ def main():
     truncate_t_bike = "TRUNCATE TABLE t_bike RESTART IDENTITY;"
     with engine_postgresql.connect() as connection:
         with connection.begin() as transaction:
-            print(f"Попытка очистить таблицу t_bike")
+            print(f"Попытка очистить таблицу t_bike...")
             # Очистка t_bike
             connection.execute(sa.text(truncate_t_bike))
             # Если ошибок нет, транзакция фиксируется автоматически
