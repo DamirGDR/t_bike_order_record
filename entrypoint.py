@@ -569,7 +569,7 @@ def main():
                     '''.format(id=str(id))
 
         with engine_postgresql.connect() as connection:
-            result = connection.execute(text(insert_example))
+            result = connection.execute(sa.text(insert_example))
 
 if __name__ == "__main__":
     main()
