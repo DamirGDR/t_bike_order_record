@@ -960,7 +960,7 @@ def main():
         message_1 = 'Самокат {number} используется сотрудником(username:{user_name}, nickname: {nickname}) в городе {city} в нерабочее время.' \
             .format(number=number, user_name=user_name, nickname=nickname, city=city)
         print(message_1)
-        send_message_tg(TOKEN, chat_id, message_1)
+        # send_message_tg(TOKEN, chat_id, message_1)
         insert_example = '''
                     UPDATE damir.alarms_5
                     SET is_message_sent = '1'
