@@ -774,108 +774,108 @@ def main():
 
     # Выгрузка гугл таблиц(Workers_city_role и График работ) в БД для alarms_5. Конец
 
-    #   Обновление таблицы alarms_5 в Postgres. Начало
+    # #   Обновление таблицы alarms_5 в Postgres. Начало
 
-    # Максимальный id записи в принимающей таблице
-    select_max_id_alarms_5 = '''
-        SELECT 
-            MAX(id)
-        FROM damir.alarms_5
-    '''
+    # # Максимальный id записи в принимающей таблице
+    # select_max_id_alarms_5 = '''
+    #     SELECT 
+    #         MAX(id)
+    #     FROM damir.alarms_5
+    # '''
 
-    df_max_id_alarms_5 = pd.read_sql(select_max_id_alarms_5, engine_postgresql)
-    max_id_alarms_5 = int(df_max_id_alarms_5.iloc[0].iloc[0])
+    # df_max_id_alarms_5 = pd.read_sql(select_max_id_alarms_5, engine_postgresql)
+    # max_id_alarms_5 = int(df_max_id_alarms_5.iloc[0].iloc[0])
 
-    select_alarms_5 = '''
-        WITH grafik_rabot AS (
-                SELECT
-                    to_char(current_date, 'YYYY-MM-DD') AS "Date",
-                    wcr.id AS "Worker id",
-                    wcr.user_name AS "Worker username",
-                    wcr.nickname ,
-                    wcr."role" ,
-                    wcr.city ,
-                    --COALESCE(res_tab."Actual start time", '23:59:59') AS "Actual start time",
-                    --concat(to_char(current_date, 'YYYY-MM-DD'), ' ', COALESCE(res_tab."Actual start time", '23:59:59')) AS "Actual start time",
-                    to_timestamp(concat(to_char(current_date, 'YYYY-MM-DD'), ' ', COALESCE(res_tab."Actual start time", '23:59:59')), 'YYYY-MM-DD HH24:MI:SS') AS "Actual start time",
-                    --COALESCE(res_tab."Actual finish time", '23:59:59') AS "Actual finish time",
-                    --concat(to_char(current_date, 'YYYY-MM-DD'), ' ', COALESCE(res_tab."Actual finish time", '23:59:59')) AS "Actual finish time" ,
-                    to_timestamp(concat(to_char(current_date, 'YYYY-MM-DD'), ' ', COALESCE(res_tab."Actual finish time", '23:59:59')), 'YYYY-MM-DD HH24:MI:SS') AS "Actual finish time"
-                FROM damir.workers_city_role wcr  
-                LEFT JOIN (
-                    SELECT 
-                        res_tab."Date" ,
-                        res_tab."Worker id" ,
-                        res_tab."Worker username" ,
-                        wcr.nickname , 
-                        wcr."role" ,
-                        wcr.city ,
-                        res_tab."Actual start time" ,
-                        res_tab."Actual finish time"
-                    FROM 
-                        (
-                        SELECT 
-                            grg."Date"::date ,
-                            grg."Worker id" ,
-                            grg."Worker username",
-                            grg."Actual start time" ,
-                            --grg."Actual finish time",
-                            replace(grg."Actual finish time", '00:00:70', '23:59:59') AS "Actual finish time",
-                            RANK() OVER (PARTITION BY grg."Date", grg."Worker id" ORDER BY grg."Actual start time" DESC) AS rn
-                        FROM damir.grafik_rabot_google grg
-                        WHERE grg."Date"::date = CURRENT_DATE
-                            AND grg."Actual start time" != '00:00:70'
-                            ) AS res_tab
-                    LEFT JOIN  workers_city_role wcr ON res_tab."Worker id" = wcr.id  
-                    WHERE res_tab.rn = 1
-                ) AS res_tab ON wcr.id = res_tab."Worker id" 
-            )
-        SELECT DISTINCT ON (res_tab."Worker id", res_tab."date", res_tab."number", res_tab."Worker username")
-            res_tab.*
-        FROM
-            (
-                SELECT 
-                    res_tab.add_time + INTERVAL '3 hours' AS add_time,
-                    res_tab.id ,
-                    res_tab."Worker id" ,
-                    res_tab."date" ,
-                    res_tab."number" ,
-                    res_tab.city_bike ,
-                    res_tab."Worker username" ,
-                    res_tab."Worker nickname" ,
-                    res_tab."Working_grafik"
-                    --res_tab.rn
-                FROM 
-                    (
-                    SELECT
-                        now() AS add_time ,
-                        tal.id ,
-                        tal.admin_id AS "Worker id",
-                        tal."date" ,
-                        CONCAT('M', LPAD(tal.data_id::text, 4, '0'), 'W' ) AS "number",
-                        tc."name" AS city_bike,
-                        grafik_rabot."Worker username" ,
-                        grafik_rabot.nickname AS "Worker nickname",
-                        tal."date" BETWEEN grafik_rabot."Actual start time" AND grafik_rabot."Actual finish time" AS "Working_grafik" ,
-                        RANK() OVER (PARTITION BY tal.admin_id, CONCAT('M', LPAD(tal.data_id::text, 4, '0'), 'W' ), grafik_rabot."Worker username" ORDER BY tal."date" DESC) AS rn
-                        --grafik_rabot."Actual start time" ,
-                        --grafik_rabot."Actual finish time"
-                    FROM damir.t_admin_log tal
-                    LEFT JOIN damir.t_bike tb ON CONCAT('M', LPAD(tal.data_id::text, 4, '0'), 'W' ) = tb."number" 
-                    LEFT JOIN damir.t_city tc ON tb.city_id = tc.id
-                    LEFT JOIN grafik_rabot ON tal.admin_id = grafik_rabot."Worker id"::integer
-                    WHERE tal.func_id = 70 
-                        AND tal.id > {max_id_alarms_5} 
-                        ) AS res_tab
-                WHERE res_tab.rn = 1
-                ) AS res_tab
-    '''.format(max_id_alarms_5=max_id_alarms_5)
-    df_alarms_5 = pd.read_sql(select_alarms_5, engine_postgresql)
+    # select_alarms_5 = '''
+    #     WITH grafik_rabot AS (
+    #             SELECT
+    #                 to_char(current_date, 'YYYY-MM-DD') AS "Date",
+    #                 wcr.id AS "Worker id",
+    #                 wcr.user_name AS "Worker username",
+    #                 wcr.nickname ,
+    #                 wcr."role" ,
+    #                 wcr.city ,
+    #                 --COALESCE(res_tab."Actual start time", '23:59:59') AS "Actual start time",
+    #                 --concat(to_char(current_date, 'YYYY-MM-DD'), ' ', COALESCE(res_tab."Actual start time", '23:59:59')) AS "Actual start time",
+    #                 to_timestamp(concat(to_char(current_date, 'YYYY-MM-DD'), ' ', COALESCE(res_tab."Actual start time", '23:59:59')), 'YYYY-MM-DD HH24:MI:SS') AS "Actual start time",
+    #                 --COALESCE(res_tab."Actual finish time", '23:59:59') AS "Actual finish time",
+    #                 --concat(to_char(current_date, 'YYYY-MM-DD'), ' ', COALESCE(res_tab."Actual finish time", '23:59:59')) AS "Actual finish time" ,
+    #                 to_timestamp(concat(to_char(current_date, 'YYYY-MM-DD'), ' ', COALESCE(res_tab."Actual finish time", '23:59:59')), 'YYYY-MM-DD HH24:MI:SS') AS "Actual finish time"
+    #             FROM damir.workers_city_role wcr  
+    #             LEFT JOIN (
+    #                 SELECT 
+    #                     res_tab."Date" ,
+    #                     res_tab."Worker id" ,
+    #                     res_tab."Worker username" ,
+    #                     wcr.nickname , 
+    #                     wcr."role" ,
+    #                     wcr.city ,
+    #                     res_tab."Actual start time" ,
+    #                     res_tab."Actual finish time"
+    #                 FROM 
+    #                     (
+    #                     SELECT 
+    #                         grg."Date"::date ,
+    #                         grg."Worker id" ,
+    #                         grg."Worker username",
+    #                         grg."Actual start time" ,
+    #                         --grg."Actual finish time",
+    #                         replace(grg."Actual finish time", '00:00:70', '23:59:59') AS "Actual finish time",
+    #                         RANK() OVER (PARTITION BY grg."Date", grg."Worker id" ORDER BY grg."Actual start time" DESC) AS rn
+    #                     FROM damir.grafik_rabot_google grg
+    #                     WHERE grg."Date"::date = CURRENT_DATE
+    #                         AND grg."Actual start time" != '00:00:70'
+    #                         ) AS res_tab
+    #                 LEFT JOIN  workers_city_role wcr ON res_tab."Worker id" = wcr.id  
+    #                 WHERE res_tab.rn = 1
+    #             ) AS res_tab ON wcr.id = res_tab."Worker id" 
+    #         )
+    #     SELECT DISTINCT ON (res_tab."Worker id", res_tab."date", res_tab."number", res_tab."Worker username")
+    #         res_tab.*
+    #     FROM
+    #         (
+    #             SELECT 
+    #                 res_tab.add_time + INTERVAL '3 hours' AS add_time,
+    #                 res_tab.id ,
+    #                 res_tab."Worker id" ,
+    #                 res_tab."date" ,
+    #                 res_tab."number" ,
+    #                 res_tab.city_bike ,
+    #                 res_tab."Worker username" ,
+    #                 res_tab."Worker nickname" ,
+    #                 res_tab."Working_grafik"
+    #                 --res_tab.rn
+    #             FROM 
+    #                 (
+    #                 SELECT
+    #                     now() AS add_time ,
+    #                     tal.id ,
+    #                     tal.admin_id AS "Worker id",
+    #                     tal."date" ,
+    #                     CONCAT('M', LPAD(tal.data_id::text, 4, '0'), 'W' ) AS "number",
+    #                     tc."name" AS city_bike,
+    #                     grafik_rabot."Worker username" ,
+    #                     grafik_rabot.nickname AS "Worker nickname",
+    #                     tal."date" BETWEEN grafik_rabot."Actual start time" AND grafik_rabot."Actual finish time" AS "Working_grafik" ,
+    #                     RANK() OVER (PARTITION BY tal.admin_id, CONCAT('M', LPAD(tal.data_id::text, 4, '0'), 'W' ), grafik_rabot."Worker username" ORDER BY tal."date" DESC) AS rn
+    #                     --grafik_rabot."Actual start time" ,
+    #                     --grafik_rabot."Actual finish time"
+    #                 FROM damir.t_admin_log tal
+    #                 LEFT JOIN damir.t_bike tb ON CONCAT('M', LPAD(tal.data_id::text, 4, '0'), 'W' ) = tb."number" 
+    #                 LEFT JOIN damir.t_city tc ON tb.city_id = tc.id
+    #                 LEFT JOIN grafik_rabot ON tal.admin_id = grafik_rabot."Worker id"::integer
+    #                 WHERE tal.func_id = 70 
+    #                     AND tal.id > {max_id_alarms_5} 
+    #                     ) AS res_tab
+    #             WHERE res_tab.rn = 1
+    #             ) AS res_tab
+    # '''.format(max_id_alarms_5=max_id_alarms_5)
+    # df_alarms_5 = pd.read_sql(select_alarms_5, engine_postgresql)
 
-    df_alarms_5.to_sql("alarms_5", engine_postgresql, if_exists="append", index=False)
-    print('Added {x} records to alarms_5 in Postgres!'.format(x=df_alarms_5.shape[0]))
+    # df_alarms_5.to_sql("alarms_5", engine_postgresql, if_exists="append", index=False)
+    # print('Added {x} records to alarms_5 in Postgres!'.format(x=df_alarms_5.shape[0]))
 
-    #   Обновление таблицы alarms_5 в Postgres. Конец
+    # #   Обновление таблицы alarms_5 в Postgres. Конец
 
     #   Обновление таблицы alarms_6 в Postgres. Начало
     # Максимальный id записи в принимающей таблице
