@@ -909,7 +909,7 @@ def main():
         LEFT JOIN shamri.t_bike tb ON ta.bike_id = tb.id 
         LEFT JOIN shamri.t_city tc ON tb.city_id = tc.id 
         WHERE ta.`type` = 2
-            AND tb.error_status != 1
+            AND tb.error_status IN (0, 2, 7)
             AND ta.id > {max_id_alarms_6}
     '''.format(max_id_alarms_6=max_id_alarms_6)
 
