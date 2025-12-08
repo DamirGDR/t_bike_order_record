@@ -330,35 +330,35 @@ def main():
 
     # #   Обновление таблицы t_bike_use в Postgres. Конец
 
-    #   Обновление таблицы t_ride_event_log в Postgres. Начало
-    # Максимальный id записи в принимающей таблице
-    select_max_id_t_ride_event_log = '''
-    SELECT 
-        MAX(id)
-    FROM damir.t_ride_event_log
-    '''
-    df_max_id_t_ride_event_log_postgres = pd.read_sql(select_max_id_t_ride_event_log, engine_postgresql)
-    max_id_t_ride_event_log = int(df_max_id_t_ride_event_log_postgres.iloc[0].iloc[0])
+    # #   Обновление таблицы t_ride_event_log в Postgres. Начало
+    # # Максимальный id записи в принимающей таблице
+    # select_max_id_t_ride_event_log = '''
+    # SELECT 
+    #     MAX(id)
+    # FROM damir.t_ride_event_log
+    # '''
+    # df_max_id_t_ride_event_log_postgres = pd.read_sql(select_max_id_t_ride_event_log, engine_postgresql)
+    # max_id_t_ride_event_log = int(df_max_id_t_ride_event_log_postgres.iloc[0].iloc[0])
 
-    select_fresh_t_ride_event_log_mysql = '''
-            SELECT
-                NOW() AS add_time,
-                t_ride_event_log.id,
-                t_ride_event_log.ride_id,
-                t_ride_event_log.event,
-                t_ride_event_log.description,
-                t_ride_event_log.created 
-            FROM shamri.t_ride_event_log
-            WHERE t_ride_event_log.id > {max_id_t_ride_event_log}
-                    '''.format(max_id_t_ride_event_log=max_id_t_ride_event_log)
+    # select_fresh_t_ride_event_log_mysql = '''
+    #         SELECT
+    #             NOW() AS add_time,
+    #             t_ride_event_log.id,
+    #             t_ride_event_log.ride_id,
+    #             t_ride_event_log.event,
+    #             t_ride_event_log.description,
+    #             t_ride_event_log.created 
+    #         FROM shamri.t_ride_event_log
+    #         WHERE t_ride_event_log.id > {max_id_t_ride_event_log}
+    #                 '''.format(max_id_t_ride_event_log=max_id_t_ride_event_log)
 
-    df_fresh_t_ride_event_log_mysql = pd.read_sql(select_fresh_t_ride_event_log_mysql, engine_mysql)
+    # df_fresh_t_ride_event_log_mysql = pd.read_sql(select_fresh_t_ride_event_log_mysql, engine_mysql)
 
 
-    df_fresh_t_ride_event_log_mysql.replace('', '0').to_sql("t_ride_event_log", engine_postgresql, if_exists="append", index=False)
-    print('Added {x} records to t_ride_event_log in Postgres!'.format(x = df_fresh_t_ride_event_log_mysql.shape[0]))
+    # df_fresh_t_ride_event_log_mysql.replace('', '0').to_sql("t_ride_event_log", engine_postgresql, if_exists="append", index=False)
+    # print('Added {x} records to t_ride_event_log in Postgres!'.format(x = df_fresh_t_ride_event_log_mysql.shape[0]))
 
-    #   Обновление таблицы t_ride_event_log в Postgres. Конец
+    # #   Обновление таблицы t_ride_event_log в Postgres. Конец
 
     #   Обновление таблицы t_admin_log в Postgres. Начало
     select_max_id_t_admin_log = '''
