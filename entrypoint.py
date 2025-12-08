@@ -257,78 +257,78 @@ def main():
 
 
 
-    #   Обновление таблицы t_bike_use в Postgres. Начало
-    # Максимальный id записи в принимающей таблице
-    select_max_id_t_bike_use = '''
-    SELECT 
-    	MAX(id)
-    FROM damir.t_bike_use
-    '''
-    df_max_id_t_bike_use_postgres = pd.read_sql(select_max_id_t_bike_use, engine_postgresql)
-    max_id_t_bike_use = int(df_max_id_t_bike_use_postgres.iloc[0].iloc[0])
+    # #   Обновление таблицы t_bike_use в Postgres. Начало
+    # # Максимальный id записи в принимающей таблице
+    # select_max_id_t_bike_use = '''
+    # SELECT 
+    # 	MAX(id)
+    # FROM damir.t_bike_use
+    # '''
+    # df_max_id_t_bike_use_postgres = pd.read_sql(select_max_id_t_bike_use, engine_postgresql)
+    # max_id_t_bike_use = int(df_max_id_t_bike_use_postgres.iloc[0].iloc[0])
 
-    select_fresh_t_bike_use_mysql = '''
-            SELECT
-                NOW() AS add_time,
-                IfNULL(t_bike_use.id,0) AS id,
-                IfNULL(t_bike_use.uid,0) AS uid,
-                IfNULL(t_bike_use.bid,0) AS bid,
-                IfNULL(t_bike_use.start_time,0) AS start_time,
-                IfNULL(t_bike_use.end_time,0) AS end_time,
-                IfNULL(t_bike_use.duration,0) AS duration ,
-                IfNULL(t_bike_use.distance,0) AS distance ,
-                IfNULL(t_bike_use.orbit,0) AS orbit,
-                IfNULL(t_bike_use.start_lat,0) AS start_lat,
-                IfNULL(t_bike_use.start_lng,0) AS start_lng,
-                IfNULL(t_bike_use.end_lat,0) AS end_lat,
-                IfNULL(t_bike_use.end_lng,0) AS end_lng,
-                IfNULL(t_bike_use.ispay,0) AS ispay,
-                IfNULL(t_bike_use.`date`,0) AS `date`,
-                IfNULL(t_bike_use.lock_location,0) AS lock_location,
-                IfNULL(t_bike_use.out_area,0) AS out_area,
-                IfNULL(t_bike_use.open_way,0) AS open_way,
-                IfNULL(t_bike_use.ride_amount,0) AS ride_amount,
-                IfNULL(t_bike_use.ride_status,0) AS ride_status,
-                IfNULL(t_bike_use.old_date,0) AS old_date,
-                IfNULL(t_bike_use.close_way,0) AS close_way,
-                IfNULL(t_bike_use.old_duration,0) AS old_duration,
-                IfNULL(t_bike_use.admin_id,0) AS admin_id,
-                IfNULL(t_bike_use.update_time,0) AS update_time,
-                IfNULL(t_bike_use.lock_time,0) AS lock_time, 
-                IfNULL(t_bike_use.host_id,0) AS host_id,
-                IfNULL(t_bike_use.ride_user,0) AS ride_user,
-                IfNULL(t_bike_use.group_ride,0) AS group_ride,
-                IfNULL(t_bike_use.start_area,0) AS start_area,
-                IfNULL(t_bike_use.end_area,0) AS end_area,
-                IfNULL(t_bike_use.stripe_charge,0) AS stripe_charge,
-                IfNULL(t_bike_use.stripe_refund,0) AS stripe_refund,
-                IfNULL(t_bike_use.pause_duration,0) AS pause_duration,
-                IfNULL(t_bike_use.discount,0) AS discount,
-                IfNULL(t_bike_use.subscription_id,0) AS subscription_id,
-                IfNULL(t_bike_use.subscription_mapping_id,0) AS subscription_mapping_id,
-                IfNULL(t_bike_use.route_image,0) AS route_image,
-                IfNULL(t_bike_use.parking_image,0) AS parking_image,
-                IfNULL(t_bike_use.force_stop,0) AS force_stop,
-                IfNULL(t_bike_use.force_stop_comment,0) AS force_stop_comment,
-                IfNULL(t_bike_use.lights,0) AS lights,
-                IfNULL(t_bike_use.gear,0) AS gear,
-                IfNULL(t_bike_use.sent_unlock_time,0) AS sent_unlock_time,
-                IfNULL(t_bike_use.recalculated,0) AS recalculated,
-                IfNULL(t_bike_use.notified,0) AS notified,
-                IfNULL(t_bike_use.notified_time,0) AS notified_time,
-                IfNULL(t_bike_use.speed_zone_id,0) AS speed_zone_id,
-                IfNULL(t_bike_use.admin_note,0) AS admin_note,
-                IfNULL(t_bike_use.subscription_payment_id,0) AS subscription_payment_id,
-                IfNULL(t_bike_use.subscr_paid_before_ride_balance,0) AS subscr_paid_before_ride_balance
-            FROM shamri.t_bike_use
-            WHERE t_bike_use.id > {max_id_t_bike_use}
-                    '''.format(max_id_t_bike_use=max_id_t_bike_use)
+    # select_fresh_t_bike_use_mysql = '''
+    #         SELECT
+    #             NOW() AS add_time,
+    #             IfNULL(t_bike_use.id,0) AS id,
+    #             IfNULL(t_bike_use.uid,0) AS uid,
+    #             IfNULL(t_bike_use.bid,0) AS bid,
+    #             IfNULL(t_bike_use.start_time,0) AS start_time,
+    #             IfNULL(t_bike_use.end_time,0) AS end_time,
+    #             IfNULL(t_bike_use.duration,0) AS duration ,
+    #             IfNULL(t_bike_use.distance,0) AS distance ,
+    #             IfNULL(t_bike_use.orbit,0) AS orbit,
+    #             IfNULL(t_bike_use.start_lat,0) AS start_lat,
+    #             IfNULL(t_bike_use.start_lng,0) AS start_lng,
+    #             IfNULL(t_bike_use.end_lat,0) AS end_lat,
+    #             IfNULL(t_bike_use.end_lng,0) AS end_lng,
+    #             IfNULL(t_bike_use.ispay,0) AS ispay,
+    #             IfNULL(t_bike_use.`date`,0) AS `date`,
+    #             IfNULL(t_bike_use.lock_location,0) AS lock_location,
+    #             IfNULL(t_bike_use.out_area,0) AS out_area,
+    #             IfNULL(t_bike_use.open_way,0) AS open_way,
+    #             IfNULL(t_bike_use.ride_amount,0) AS ride_amount,
+    #             IfNULL(t_bike_use.ride_status,0) AS ride_status,
+    #             IfNULL(t_bike_use.old_date,0) AS old_date,
+    #             IfNULL(t_bike_use.close_way,0) AS close_way,
+    #             IfNULL(t_bike_use.old_duration,0) AS old_duration,
+    #             IfNULL(t_bike_use.admin_id,0) AS admin_id,
+    #             IfNULL(t_bike_use.update_time,0) AS update_time,
+    #             IfNULL(t_bike_use.lock_time,0) AS lock_time, 
+    #             IfNULL(t_bike_use.host_id,0) AS host_id,
+    #             IfNULL(t_bike_use.ride_user,0) AS ride_user,
+    #             IfNULL(t_bike_use.group_ride,0) AS group_ride,
+    #             IfNULL(t_bike_use.start_area,0) AS start_area,
+    #             IfNULL(t_bike_use.end_area,0) AS end_area,
+    #             IfNULL(t_bike_use.stripe_charge,0) AS stripe_charge,
+    #             IfNULL(t_bike_use.stripe_refund,0) AS stripe_refund,
+    #             IfNULL(t_bike_use.pause_duration,0) AS pause_duration,
+    #             IfNULL(t_bike_use.discount,0) AS discount,
+    #             IfNULL(t_bike_use.subscription_id,0) AS subscription_id,
+    #             IfNULL(t_bike_use.subscription_mapping_id,0) AS subscription_mapping_id,
+    #             IfNULL(t_bike_use.route_image,0) AS route_image,
+    #             IfNULL(t_bike_use.parking_image,0) AS parking_image,
+    #             IfNULL(t_bike_use.force_stop,0) AS force_stop,
+    #             IfNULL(t_bike_use.force_stop_comment,0) AS force_stop_comment,
+    #             IfNULL(t_bike_use.lights,0) AS lights,
+    #             IfNULL(t_bike_use.gear,0) AS gear,
+    #             IfNULL(t_bike_use.sent_unlock_time,0) AS sent_unlock_time,
+    #             IfNULL(t_bike_use.recalculated,0) AS recalculated,
+    #             IfNULL(t_bike_use.notified,0) AS notified,
+    #             IfNULL(t_bike_use.notified_time,0) AS notified_time,
+    #             IfNULL(t_bike_use.speed_zone_id,0) AS speed_zone_id,
+    #             IfNULL(t_bike_use.admin_note,0) AS admin_note,
+    #             IfNULL(t_bike_use.subscription_payment_id,0) AS subscription_payment_id,
+    #             IfNULL(t_bike_use.subscr_paid_before_ride_balance,0) AS subscr_paid_before_ride_balance
+    #         FROM shamri.t_bike_use
+    #         WHERE t_bike_use.id > {max_id_t_bike_use}
+    #                 '''.format(max_id_t_bike_use=max_id_t_bike_use)
 
-    df_fresh_t_bike_use_mysql = pd.read_sql(select_fresh_t_bike_use_mysql, engine_mysql)
-    df_fresh_t_bike_use_mysql.replace('', '0').to_sql("t_bike_use", engine_postgresql, if_exists="append", index=False)
-    print('Added {x} records to t_bike_use in Postgres!'.format(x=df_fresh_t_bike_use_mysql.shape[0]))
+    # df_fresh_t_bike_use_mysql = pd.read_sql(select_fresh_t_bike_use_mysql, engine_mysql)
+    # df_fresh_t_bike_use_mysql.replace('', '0').to_sql("t_bike_use", engine_postgresql, if_exists="append", index=False)
+    # print('Added {x} records to t_bike_use in Postgres!'.format(x=df_fresh_t_bike_use_mysql.shape[0]))
 
-    #   Обновление таблицы t_bike_use в Postgres. Конец
+    # #   Обновление таблицы t_bike_use в Postgres. Конец
 
     #   Обновление таблицы t_ride_event_log в Postgres. Начало
     # Максимальный id записи в принимающей таблице
