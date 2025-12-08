@@ -389,58 +389,58 @@ def main():
     print('Added {x} records to t_admin_log in Postgres!'.format(x=df_fresh_t_admin_log_mysql.shape[0]))
     #   Обновление таблицы t_admin_log в Postgres. Конец
 
-    #   Обновление таблицы t_payment_details в Postgres. Начало
-    #   Максимальный id записи в принимающей таблице
-    select_max_id_t_payment_details = '''
-        SELECT 
-            MAX(id)
-        FROM damir.t_payment_details
-    '''
-    df_max_id_t_payment_details_postgres = pd.read_sql(select_max_id_t_payment_details, engine_postgresql)
+    # #   Обновление таблицы t_payment_details в Postgres. Начало
+    # #   Максимальный id записи в принимающей таблице
+    # select_max_id_t_payment_details = '''
+    #     SELECT 
+    #         MAX(id)
+    #     FROM damir.t_payment_details
+    # '''
+    # df_max_id_t_payment_details_postgres = pd.read_sql(select_max_id_t_payment_details, engine_postgresql)
 
-    max_id_t_payment_details = int(df_max_id_t_payment_details_postgres.iloc[0].iloc[0])
+    # max_id_t_payment_details = int(df_max_id_t_payment_details_postgres.iloc[0].iloc[0])
 
-    select_fresh_t_payment_details_mysql = '''
-            SELECT 
-                NOW() AS add_time ,
-                IFNULL(tpd.id, 0) AS id ,
-                IFNULL(tpd.user_id, 0) AS user_id ,
-                IFNULL(tpd.ride_id, 0) AS ride_id ,
-                IFNULL(tpd.price, 0) AS price ,
-                IFNULL(tpd.unlock_price, 0) AS unlock_price ,
-                IFNULL(tpd.unit_count, 0) AS unit_count ,
-                IFNULL(tpd.unit_type, 0) AS unit_type ,
-                IFNULL(tpd.currency, 'EUR') AS currency ,
-                IFNULL(tpd.hold_price, 0) AS hold_price ,
-                IFNULL(tpd.hold_count, 0) AS hold_count ,
-                IFNULL(tpd.hold_unit_type, 0) AS hold_unit_type ,
-                IFNULL(tpd.total_ride_cost, 0) AS total_ride_cost ,
-                IFNULL(tpd.pause_cost, 0) AS pause_cost,
-                IFNULL(tpd.debit_balance, 0) AS debit_balance,
-                IFNULL(tpd.debit_gift_amount, 0) AS debit_gift_amount,
-                IFNULL(tpd.debit_cash, 0) AS debit_cash,
-                IFNULL(tpd.subscription_pause_sec, 0) AS subscription_pause_sec ,
-                IFNULL(tpd.subscription_cost, 0) AS subscription_cost ,
-                IFNULL(tpd.subscription_id, 0) AS subscription_id ,
-                IFNULL(tpd.subscription_mapping_id, 0) AS subscription_mapping_id ,
-                IFNULL(tpd.subscription_paid_before_ride, 0) AS subscription_paid_before_ride ,
-                IFNULL(tpd.created, STR_TO_DATE("2024-01-01 00:00:00", "%Y-%m-%d %H:%i:%s")) AS created ,
-                IFNULL(tpd.unlock_sec_included, 0) AS unlock_sec_included,
-                IFNULL(tpd.area_bonus_type, 0) AS area_bonus_type,
-                IFNULL(tpd.area_bonus_value, 0) AS area_bonus_value,
-                IFNULL(tpd.area_bonus_amount, 0) AS area_bonus_amount,
-                IFNULL(tpd.bike_discount_id, 0) AS bike_discount_id,
-                IFNULL(tpd.bike_discount_amount, 0) AS bike_discount_amount,
-                IFNULL(tpd.bike_discount_value, 0) AS bike_discount_value,
-                IFNULL(tpd.bike_discount_type, 0) AS bike_discount_type
-            FROM shamri.t_payment_details tpd 
-            WHERE tpd.id > {max_id_t_payment_details}
-                    '''.format(max_id_t_payment_details=max_id_t_payment_details)
-    df_fresh_t_payment_details_mysql = pd.read_sql(select_fresh_t_payment_details_mysql, engine_mysql)
-    df_fresh_t_payment_details_mysql.replace('', '0').to_sql("t_payment_details", engine_postgresql, if_exists="append",
-                                                             index=False)
-    print('Added {x} records to t_payment_details in Postgres!'.format(x=df_fresh_t_payment_details_mysql.shape[0]))
-    #   Обновление таблицы t_payment_details в Postgres. Конец
+    # select_fresh_t_payment_details_mysql = '''
+    #         SELECT 
+    #             NOW() AS add_time ,
+    #             IFNULL(tpd.id, 0) AS id ,
+    #             IFNULL(tpd.user_id, 0) AS user_id ,
+    #             IFNULL(tpd.ride_id, 0) AS ride_id ,
+    #             IFNULL(tpd.price, 0) AS price ,
+    #             IFNULL(tpd.unlock_price, 0) AS unlock_price ,
+    #             IFNULL(tpd.unit_count, 0) AS unit_count ,
+    #             IFNULL(tpd.unit_type, 0) AS unit_type ,
+    #             IFNULL(tpd.currency, 'EUR') AS currency ,
+    #             IFNULL(tpd.hold_price, 0) AS hold_price ,
+    #             IFNULL(tpd.hold_count, 0) AS hold_count ,
+    #             IFNULL(tpd.hold_unit_type, 0) AS hold_unit_type ,
+    #             IFNULL(tpd.total_ride_cost, 0) AS total_ride_cost ,
+    #             IFNULL(tpd.pause_cost, 0) AS pause_cost,
+    #             IFNULL(tpd.debit_balance, 0) AS debit_balance,
+    #             IFNULL(tpd.debit_gift_amount, 0) AS debit_gift_amount,
+    #             IFNULL(tpd.debit_cash, 0) AS debit_cash,
+    #             IFNULL(tpd.subscription_pause_sec, 0) AS subscription_pause_sec ,
+    #             IFNULL(tpd.subscription_cost, 0) AS subscription_cost ,
+    #             IFNULL(tpd.subscription_id, 0) AS subscription_id ,
+    #             IFNULL(tpd.subscription_mapping_id, 0) AS subscription_mapping_id ,
+    #             IFNULL(tpd.subscription_paid_before_ride, 0) AS subscription_paid_before_ride ,
+    #             IFNULL(tpd.created, STR_TO_DATE("2024-01-01 00:00:00", "%Y-%m-%d %H:%i:%s")) AS created ,
+    #             IFNULL(tpd.unlock_sec_included, 0) AS unlock_sec_included,
+    #             IFNULL(tpd.area_bonus_type, 0) AS area_bonus_type,
+    #             IFNULL(tpd.area_bonus_value, 0) AS area_bonus_value,
+    #             IFNULL(tpd.area_bonus_amount, 0) AS area_bonus_amount,
+    #             IFNULL(tpd.bike_discount_id, 0) AS bike_discount_id,
+    #             IFNULL(tpd.bike_discount_amount, 0) AS bike_discount_amount,
+    #             IFNULL(tpd.bike_discount_value, 0) AS bike_discount_value,
+    #             IFNULL(tpd.bike_discount_type, 0) AS bike_discount_type
+    #         FROM shamri.t_payment_details tpd 
+    #         WHERE tpd.id > {max_id_t_payment_details}
+    #                 '''.format(max_id_t_payment_details=max_id_t_payment_details)
+    # df_fresh_t_payment_details_mysql = pd.read_sql(select_fresh_t_payment_details_mysql, engine_mysql)
+    # df_fresh_t_payment_details_mysql.replace('', '0').to_sql("t_payment_details", engine_postgresql, if_exists="append",
+    #                                                          index=False)
+    # print('Added {x} records to t_payment_details in Postgres!'.format(x=df_fresh_t_payment_details_mysql.shape[0]))
+    # #   Обновление таблицы t_payment_details в Postgres. Конец
 
 
     #   Обновление таблицы alarms_1 в Postgres. Начало
