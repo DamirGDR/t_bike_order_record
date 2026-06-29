@@ -37,6 +37,37 @@ def get_google_creds() -> str:
 def is_telegram_send_enabled() -> bool:
     return os.environ.get("send_telegram", "").lower() in ("1", "true", "yes")
 
+
+def get_etl_batch_size() -> int:
+    return int(os.environ.get("etl_batch_size", "10000"))
+
+
+def get_etl_max_batches_per_run() -> int | None:
+    value = os.environ.get("etl_max_batches_per_run", "10").strip()
+    if not value:
+        return None
+    return int(value)
+
+
+def should_skip_alarms(order_record_backlog_remaining: bool) -> bool:
+    if os.environ.get("skip_alarms", "").lower() in ("1", "true", "yes"):
+        return True
+    return order_record_backlog_remaining
+
+
+def sql_max_id(df: pd.DataFrame) -> int:
+    value = df.iloc[0].iloc[0]
+    if value is None or pd.isna(value):
+        return 0
+    return int(value)
+
+
+def prepare_order_record_df(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["imei"] = df["imei"].astype(str).str.replace("\x00", "", regex=False)
+    df["content"] = df["content"].astype(str).str.replace("\x00", "", regex=False)
+    return df.replace("", "0").replace("\x00", "", regex=False)
+
 # def type_stavka(df):
 #     if pd.isnull(df['Actual finish time']) or (df['Actual finish time'] == ''):
 #         return df['Конец дня']
@@ -205,17 +236,19 @@ def main():
                             FROM shamri.t_bike
     '''
 
+    print("Reading t_bike from MySQL...", flush=True)
     df_t_bike = pd.read_sql(select_t_bike, engine_mysql)
+    print(f"t_bike: read {len(df_t_bike)} rows from MySQL", flush=True)
 
     # Очистка таблицы в Postgres
     truncate_t_bike = "TRUNCATE TABLE t_bike RESTART IDENTITY;"
     with engine_postgresql.connect() as connection:
         with connection.begin() as transaction:
             connection.execute(sa.text(truncate_t_bike))
-            print(f"Таблица t_bike успешно очищена!")
+            print("Таблица t_bike успешно очищена!", flush=True)
 
-    df_t_bike.to_sql("t_bike", engine_postgresql, if_exists="append", index=False)
-    print('Таблица t_bike успешно обновлена!')
+    df_t_bike.to_sql("t_bike", engine_postgresql, if_exists="append", index=False, chunksize=500)
+    print("Таблица t_bike успешно обновлена!", flush=True)
 
     #   Обновление таблицы t_bike в Postgres. Конец
 
@@ -227,40 +260,72 @@ def main():
     FROM damir.t_bike_order_record
     '''
     df_max_id_postgres = pd.read_sql(select_max_id_t_bike_order_record, engine_postgresql)
-    max_id_postgres = int(df_max_id_postgres.iloc[0].iloc[0])
+    last_id = sql_max_id(df_max_id_postgres)
+    batch_size = get_etl_batch_size()
+    max_batches = get_etl_max_batches_per_run()
+    total_added = 0
+    order_record_backlog_remaining = False
 
-    # Выгрузка свежих данных t_bike_order_record из MYSQL
-    select_fresh_t_bike_order_record_mysql = '''
-    SELECT 
-    	NOW() AS add_time,
-    	IFNULL(t_bike_order_record.id,0) AS id, 
-    	IFNULL(t_bike_order_record.imei,0) AS imei, 
-    	IFNULL(t_bike_order_record.order_id,0) AS order_id, 
-    	IFNULL(t_bike_order_record.`time`,0) AS `time`,
-    	IFNULL(t_bike_order_record.content,0) AS content, 
-    	IFNULL(t_bike_order_record.`from`,0) AS `from`,
-    	IFNULL(t_bike.error_status,100) AS error_status
-    FROM shamri.t_bike_order_record
-    LEFT JOIN t_bike ON t_bike_order_record.imei = t_bike.imei
-    WHERE 
-    	t_bike_order_record.id > {max_id_postgres}
-    '''.format(max_id_postgres=max_id_postgres)
+    print(
+        f"Syncing t_bike_order_record from id>{last_id} "
+        f"(batch_size={batch_size}, max_batches={max_batches})...",
+        flush=True,
+    )
 
-    df_fresh_t_bike_order_record_mysql = pd.read_sql(select_fresh_t_bike_order_record_mysql, engine_mysql)
+    batch_num = 0
+    while True:
+        if max_batches is not None and batch_num >= max_batches:
+            order_record_backlog_remaining = True
+            print(
+                f"t_bike_order_record: reached max_batches={max_batches}, backlog remains",
+                flush=True,
+            )
+            break
 
-    df_fresh_t_bike_order_record_mysql['imei'] = df_fresh_t_bike_order_record_mysql['imei'].astype(str).str.replace(
-        '\x00', '', regex=False)
-    df_fresh_t_bike_order_record_mysql['content'] = df_fresh_t_bike_order_record_mysql['content'].astype(
-        str).str.replace('\x00', '', regex=False)
+        batch_num += 1
+        select_fresh_t_bike_order_record_mysql = '''
+        SELECT 
+            NOW() AS add_time,
+            IFNULL(t_bike_order_record.id,0) AS id, 
+            IFNULL(t_bike_order_record.imei,0) AS imei, 
+            IFNULL(t_bike_order_record.order_id,0) AS order_id, 
+            IFNULL(t_bike_order_record.`time`,0) AS `time`,
+            IFNULL(t_bike_order_record.content,0) AS content, 
+            IFNULL(t_bike_order_record.`from`,0) AS `from`,
+            IFNULL(t_bike.error_status,100) AS error_status
+        FROM shamri.t_bike_order_record
+        LEFT JOIN t_bike ON t_bike_order_record.imei = t_bike.imei
+        WHERE 
+            t_bike_order_record.id > {last_id}
+        ORDER BY t_bike_order_record.id
+        LIMIT {batch_size}
+        '''.format(last_id=last_id, batch_size=batch_size)
 
-    # Загрузка свежих данных t_bike_order_record в Postgres
-    df_fresh_t_bike_order_record_mysql \
-            .replace('', '0') \
-            .replace('\x00', '', regex=False) \
-            .to_sql("t_bike_order_record", engine_postgresql, if_exists="append", index=False)
+        df_batch = pd.read_sql(select_fresh_t_bike_order_record_mysql, engine_mysql)
+        if df_batch.empty:
+            break
 
-    
-    print('Added {x} records to t_bike_order_record in Postgres!'.format(x = df_fresh_t_bike_order_record_mysql.shape[0]))
+        df_batch = prepare_order_record_df(df_batch)
+        df_batch.to_sql(
+            "t_bike_order_record",
+            engine_postgresql,
+            if_exists="append",
+            index=False,
+            chunksize=1000,
+        )
+
+        batch_count = len(df_batch)
+        last_id = int(df_batch["id"].max())
+        total_added += batch_count
+        print(
+            f"t_bike_order_record: batch {batch_num}, +{batch_count} rows, up to id={last_id}",
+            flush=True,
+        )
+
+        if batch_count < batch_size:
+            break
+
+    print(f"Added {total_added} records to t_bike_order_record in Postgres!", flush=True)
 
 
 
@@ -451,6 +516,17 @@ def main():
 
 
     #   Обновление таблицы alarms_1 в Postgres. Начало
+    skip_alarms = should_skip_alarms(order_record_backlog_remaining)
+    if skip_alarms:
+        print("Skipping alarms and telegram notifications for this run", flush=True)
+
+    if not skip_alarms:
+        _run_alarms_and_telegram(engine_postgresql, engine_mysql)
+
+    _sync_checkup_from_google(engine_postgresql)
+
+
+def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     select_max_id_alarms_1 = '''
     SELECT 
         MAX(id)
@@ -991,79 +1067,6 @@ def main():
     print('Added {x} records to alarms_6 in Postgres!'.format(x=df_fresh_alarms_6.shape[0]))
     #   Обновление таблицы alarms_6 в Postgres. Конец
 
-
-
-    #   Обновление таблицы checkup_last_dates_from_google в Postgres. Начало
-
-    # Скачивание t_bike и t_city
-    select_tb_tc = '''
-        SELECT
-            now()::timestamp without time zone + INTERVAL '3 hours' AS add_time,
-            tb."number" ,
-            tb.model ,
-            tc."name" AS city_name
-        FROM damir.t_bike tb
-        LEFT JOIN damir.t_city tc ON tb.city_id = tc.id
-        WHERE tb.error_status IN (0,7)
-    '''
-    df_tb_tc = pd.read_sql(select_tb_tc, engine_postgresql)
-
-    # Скачивание Учет ремонтов в городах
-    SPREADSHEET_ID = '1BMH_HSxmK33SZvv3cIAH_SIgvm2NncSTTKI1aa7CoG8'
-    RANGE_NAME = 'Учет ремонтов в городах!A:P'
-    google_service_account_json = get_google_creds()
-
-    with open('google_json.json', 'w') as fp:
-        json.dump(json.loads(google_service_account_json, strict=False), fp)
-    generated_json_file = './google_json.json'
-    SERVICE_ACCOUNT_FILE = './google_json.json'
-
-    service_account_file = generated_json_file
-    sheets_service = get_sheets_service(SERVICE_ACCOUNT_FILE)
-    df_uch_re = read_sheet_data_to_pandas(sheets_service, SPREADSHEET_ID, RANGE_NAME)
-
-    df_ch = df_uch_re[(df_uch_re['Код задачи'] == 'ch') & (df_uch_re['Финальный статус'] == 'ok')].copy()
-    df_ch[['day', 'month']] = df_ch['Дата'].str.split('.', expand=True)
-    df_ch['date_ch'] = pd.to_datetime(df_ch['Год'] + '-' + df_ch['month'] + '-' + df_ch['day'])
-    df_ch['rn'] = df_ch.groupby(['date_ch', 'Номер самоката'], as_index=False)['date_ch'].rank(method="first",
-                                                                                               ascending=False)
-    # Последние записи в общем
-    df_ch = df_ch[df_ch['rn'] == 1]
-    df_ch['rn1'] = df_ch.groupby(['Номер самоката'], as_index=False)['date_ch'].rank(method="first", ascending=False)
-    df_ch = df_ch[df_ch['rn1'] == 1]
-    df_ch = df_ch[['date_ch', 'Номер самоката',
-                   'Worker ID', 'Кем отремонтирован',
-                   'Причина (что пишут в чате)', 'Кем учетно',
-                   'Ремонт в рабочее время?', 'Откуда взяты запчасти',
-                   'Результат после ремонта', 'Финальный статус']]
-    df_ch = df_ch.rename(columns={'Номер самоката': 'number'})
-    df_temp = df_tb_tc.merge(df_ch, how='left', on='number')
-    df_temp['date_ch'] = df_temp['date_ch'].fillna(pd.Timestamp('2025-01-01'))
-    df_temp = df_temp.fillna(0).replace('', '0')
-    df_temp = df_temp.rename(columns={'Worker ID': 'worker_id',
-                                      'Кем отремонтирован': 'who_repaired',
-                                      'Причина (что пишут в чате)': 'chat_reason',
-                                      'Кем учетно': 'admin',
-                                      'Ремонт в рабочее время?': 'working_time',
-                                      'Откуда взяты запчасти': 'spare_parts_from',
-                                      'Результат после ремонта': 'result_after_repair',
-                                      'Финальный статус': 'status'})
-    df_temp['worker_id'] = df_temp['worker_id'].astype(int)
-
-    # Очистка таблицы
-    truncate_t_bike = "TRUNCATE TABLE checkup_last_dates_from_google RESTART IDENTITY;"
-    with engine_postgresql.connect() as connection:
-        with connection.begin() as transaction:
-            connection.execute(sa.text(truncate_t_bike))
-            print(f"Таблица checkup_last_dates_from_google успешно очищена!")
-
-    df_temp.to_sql("checkup_last_dates_from_google", engine_postgresql, if_exists="append", index=False)
-    print('Таблица checkup_last_dates_from_google успешно обновлена!')
-
-    #   Обновление таблицы checkup_last_dates_from_google в Postgres. Конец
-
-
-
     # Отправка alarms_1 в тг
     TOKEN = get_token()
     chat_id = get_chat_id()
@@ -1253,5 +1256,74 @@ def main():
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
                 connection.execute(sa.text(insert_example))
+
+
+def _sync_checkup_from_google(engine_postgresql):
+    #   Обновление таблицы checkup_last_dates_from_google в Postgres. Начало
+    print("Syncing checkup_last_dates_from_google...", flush=True)
+
+    select_tb_tc = '''
+        SELECT
+            now()::timestamp without time zone + INTERVAL '3 hours' AS add_time,
+            tb."number" ,
+            tb.model ,
+            tc."name" AS city_name
+        FROM damir.t_bike tb
+        LEFT JOIN damir.t_city tc ON tb.city_id = tc.id
+        WHERE tb.error_status IN (0,7)
+    '''
+    df_tb_tc = pd.read_sql(select_tb_tc, engine_postgresql)
+
+    SPREADSHEET_ID = '1BMH_HSxmK33SZvv3cIAH_SIgvm2NncSTTKI1aa7CoG8'
+    RANGE_NAME = 'Учет ремонтов в городах!A:P'
+    google_service_account_json = get_google_creds()
+
+    with open('google_json.json', 'w') as fp:
+        json.dump(json.loads(google_service_account_json, strict=False), fp)
+    generated_json_file = './google_json.json'
+    SERVICE_ACCOUNT_FILE = './google_json.json'
+
+    service_account_file = generated_json_file
+    sheets_service = get_sheets_service(SERVICE_ACCOUNT_FILE)
+    df_uch_re = read_sheet_data_to_pandas(sheets_service, SPREADSHEET_ID, RANGE_NAME)
+
+    df_ch = df_uch_re[(df_uch_re['Код задачи'] == 'ch') & (df_uch_re['Финальный статус'] == 'ok')].copy()
+    df_ch[['day', 'month']] = df_ch['Дата'].str.split('.', expand=True)
+    df_ch['date_ch'] = pd.to_datetime(df_ch['Год'] + '-' + df_ch['month'] + '-' + df_ch['day'])
+    df_ch['rn'] = df_ch.groupby(['date_ch', 'Номер самоката'], as_index=False)['date_ch'].rank(method="first",
+                                                                                               ascending=False)
+    df_ch = df_ch[df_ch['rn'] == 1]
+    df_ch['rn1'] = df_ch.groupby(['Номер самоката'], as_index=False)['date_ch'].rank(method="first", ascending=False)
+    df_ch = df_ch[df_ch['rn1'] == 1]
+    df_ch = df_ch[['date_ch', 'Номер самоката',
+                   'Worker ID', 'Кем отремонтирован',
+                   'Причина (что пишут в чате)', 'Кем учетно',
+                   'Ремонт в рабочее время?', 'Откуда взяты запчасти',
+                   'Результат после ремонта', 'Финальный статус']]
+    df_ch = df_ch.rename(columns={'Номер самоката': 'number'})
+    df_temp = df_tb_tc.merge(df_ch, how='left', on='number')
+    df_temp['date_ch'] = df_temp['date_ch'].fillna(pd.Timestamp('2025-01-01'))
+    df_temp = df_temp.fillna(0).replace('', '0')
+    df_temp = df_temp.rename(columns={'Worker ID': 'worker_id',
+                                      'Кем отремонтирован': 'who_repaired',
+                                      'Причина (что пишут в чате)': 'chat_reason',
+                                      'Кем учетно': 'admin',
+                                      'Ремонт в рабочее время?': 'working_time',
+                                      'Откуда взяты запчасти': 'spare_parts_from',
+                                      'Результат после ремонта': 'result_after_repair',
+                                      'Финальный статус': 'status'})
+    df_temp['worker_id'] = df_temp['worker_id'].astype(int)
+
+    truncate_t_bike = "TRUNCATE TABLE checkup_last_dates_from_google RESTART IDENTITY;"
+    with engine_postgresql.connect() as connection:
+        with connection.begin() as transaction:
+            connection.execute(sa.text(truncate_t_bike))
+            print("Таблица checkup_last_dates_from_google успешно очищена!", flush=True)
+
+    df_temp.to_sql("checkup_last_dates_from_google", engine_postgresql, if_exists="append", index=False)
+    print("Таблица checkup_last_dates_from_google успешно обновлена!", flush=True)
+    #   Обновление таблицы checkup_last_dates_from_google в Postgres. Конец
+
+
 if __name__ == "__main__":
     main()
