@@ -201,7 +201,7 @@ def main():
                             IFNULL(t_bike.last_service_time, STR_TO_DATE("2024-01-01 00:00:00", "%Y-%m-%d %H:%i:%s")) AS last_service_time,
                             IFNULL(t_bike.industry_id,0) AS industry_id,
                             IFNULL(t_bike.ble_key,'empty') AS ble_key,
-                            IFNULL(t_bike.customer_group_id,0) AS customer_group_id 
+                            IFNULL(t_bike.customer_group_id,0) AS user_group_id 
                             FROM shamri.t_bike
     '''
 
