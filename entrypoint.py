@@ -33,6 +33,10 @@ def get_google_creds() -> str:
     url = os.environ["google_service_account_json"]
     return url
 
+
+def is_telegram_send_enabled() -> bool:
+    return os.environ.get("send_telegram", "").lower() in ("1", "true", "yes")
+
 # def type_stavka(df):
 #     if pd.isnull(df['Actual finish time']) or (df['Actual finish time'] == ''):
 #         return df['Конец дня']
@@ -131,6 +135,9 @@ def get_sheets_service(service_account_file: str):
 
 # Функция отправки сообщения в ТГ
 def send_message_tg(TOKEN, chat_id, message_text):
+    if not is_telegram_send_enabled():
+        print(f"[telegram disabled] {message_text}")
+        return None
     TOKEN = TOKEN
     chat_id = chat_id
     message = message_text
@@ -1060,6 +1067,8 @@ def main():
     # Отправка alarms_1 в тг
     TOKEN = get_token()
     chat_id = get_chat_id()
+    if not is_telegram_send_enabled():
+        print("send_telegram не включён: уведомления не отправляются, записи будут помечены как отправленные")
 
     select_unsent_records = '''
     SELECT *
