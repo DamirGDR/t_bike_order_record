@@ -1,5 +1,7 @@
+import csv
 import os
 import time
+from io import StringIO
 
 import pandas as pd
 import sqlalchemy as sa
@@ -187,6 +189,56 @@ def prepare_order_record_df(
     if add_time is not None:
         df["add_time"] = add_time
     return df.replace("", "0").replace("\x00", "", regex=False)
+
+
+ORDER_RECORD_COPY_COLUMNS = (
+    "add_time",
+    "id",
+    "imei",
+    "order_id",
+    "time",
+    "content",
+    "from",
+    "error_status",
+)
+
+ORDER_RECORD_COPY_SQL = (
+    'COPY t_bike_order_record (add_time, id, imei, order_id, "time", content, "from", error_status) '
+    "FROM STDIN WITH (FORMAT csv)"
+)
+
+
+def copy_t_bike_order_record_batch(
+    engine_postgresql: sa.Engine, df: pd.DataFrame
+) -> None:
+    payload = df.loc[:, ORDER_RECORD_COPY_COLUMNS].copy()
+    payload["add_time"] = pd.to_datetime(payload["add_time"]).dt.strftime(
+        "%Y-%m-%d %H:%M:%S.%f"
+    )
+    for col in ("id", "order_id", "time", "error_status"):
+        payload[col] = (
+            pd.to_numeric(payload[col], errors="coerce").fillna(0).astype("int64")
+        )
+    for col in ("imei", "content", "from"):
+        payload[col] = payload[col].astype(str)
+
+    buffer = StringIO()
+    payload.to_csv(
+        buffer,
+        index=False,
+        header=False,
+        quoting=csv.QUOTE_MINIMAL,
+        doublequote=True,
+    )
+    data = buffer.getvalue()
+    if not data:
+        return
+
+    with engine_postgresql.begin() as conn:
+        raw_conn = conn.connection.driver_connection
+        with raw_conn.cursor() as cur:
+            with cur.copy(ORDER_RECORD_COPY_SQL) as copy:
+                copy.write(data)
 
 
 # def type_stavka(df):
@@ -460,13 +512,7 @@ def main():
         prep_seconds = time.monotonic() - prep_started
 
         write_started = time.monotonic()
-        df_batch.to_sql(
-            "t_bike_order_record",
-            engine_postgresql,
-            if_exists="append",
-            index=False,
-            chunksize=1000,
-        )
+        copy_t_bike_order_record_batch(engine_postgresql, df_batch)
         write_seconds = time.monotonic() - write_started
 
         batch_count = len(df_batch)
