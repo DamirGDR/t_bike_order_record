@@ -54,6 +54,29 @@ def get_etl_alarm_skip_threshold() -> int:
     return int(os.environ.get("etl_alarm_skip_threshold", "100000"))
 
 
+def get_alarms_lookback_days() -> int:
+    return int(os.environ.get("alarms_lookback_days", "1"))
+
+
+def get_order_record_floor_id_for_alarms(
+    engine_postgresql, min_time_epoch: int
+) -> int:
+    df = pd.read_sql(
+        """
+        SELECT COALESCE(MIN(id), 0) AS min_id
+        FROM damir.t_bike_order_record
+        WHERE "time" >= %(min_time_epoch)s
+        """,
+        engine_postgresql,
+        params={"min_time_epoch": min_time_epoch},
+    )
+    return int(df.iloc[0]["min_id"])
+
+
+def effective_alarms_order_record_min_id(stored_max_id: int, floor_id: int) -> int:
+    return max(stored_max_id, floor_id)
+
+
 def should_skip_alarms(
     order_record_backlog_remaining: bool, order_records_added: int = 0
 ) -> bool:
@@ -566,13 +589,35 @@ def main():
 
 
 def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
+    lookback_days = get_alarms_lookback_days()
+    min_time_epoch = int(
+        (pd.Timestamp.utcnow() - pd.Timedelta(days=lookback_days)).timestamp()
+    )
+    print(
+        f"Running alarms (lookback={lookback_days}d, min_time_epoch={min_time_epoch})...",
+        flush=True,
+    )
+    order_record_floor_id = get_order_record_floor_id_for_alarms(
+        engine_postgresql, min_time_epoch
+    )
+    print(f"alarms order_record floor_id={order_record_floor_id}", flush=True)
+
+    print("Computing alarms_1...", flush=True)
     select_max_id_alarms_1 = """
     SELECT 
         MAX(id)
     FROM damir.alarms_1
     """
     df_max_id_alarms_1 = pd.read_sql(select_max_id_alarms_1, engine_postgresql)
-    max_id_alarms_1 = int(df_max_id_alarms_1.iloc[0].iloc[0])
+    max_id_alarms_1 = sql_max_id(df_max_id_alarms_1)
+    effective_min_id_alarms_1 = effective_alarms_order_record_min_id(
+        max_id_alarms_1, order_record_floor_id
+    )
+    print(
+        f"alarms_1: stored_max_id={max_id_alarms_1}, "
+        f"effective_min_id={effective_min_id_alarms_1}",
+        flush=True,
+    )
     select_fresh_alarms_1 = """WITH detected_combinations AS (
                     SELECT
                         id,
@@ -594,9 +639,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
                             damir.t_bike_order_record
                         WHERE
                             content IN ('status:1', 'status:2', 'status:6')
-                            -- AND t_bike_order_record."time" >= extract(epoch from CURRENT_DATE)
                             AND t_bike_order_record.error_status IN (0,2,7)
-                            AND t_bike_order_record.id > {}
+                            AND t_bike_order_record.id > {effective_min_id}
+                            AND t_bike_order_record."time" >= {min_time_epoch}
                         ) AS alarm_events
                 ),
                 combinations_result AS (
@@ -681,10 +726,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
                     LEFT JOIN distinct_trevogi 
                     ON t_bike_order_record.imei = distinct_trevogi.imei AND t_bike_order_record."time" = distinct_trevogi.detection_time_timestamp
                     WHERE t_bike_order_record.imei IN (SELECT DISTINCT distinct_trevogi.imei FROM distinct_trevogi) 
-                        -- AND t_bike_order_record."time" <= (SELECT MAX(distinct_trevogi.detection_time_timestamp) FROM distinct_trevogi)
                         AND t_bike_order_record."content" LIKE '%%lat%%' 
-                        -- AND t_bike_order_record."time" >= extract(epoch from CURRENT_DATE)
-                        AND t_bike_order_record.id > {}
+                        AND t_bike_order_record.id > {effective_min_id}
+                        AND t_bike_order_record."time" >= {min_time_epoch}
                 ),
                 t_bike_order_record_trevogi_with_temp_distances AS (
                     SELECT
@@ -749,7 +793,10 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
                     LEFT JOIN damir.t_bike ON alarm_tab.imei = t_bike.imei
                     LEFT JOIN damir.t_city ON t_bike.city_id = t_city.id
                     ORDER BY alarm_tab.detection_time ASC) AS res_tab
-                    WHERE res_tab.rn = 1""".format(max_id_alarms_1, max_id_alarms_1)
+                    WHERE res_tab.rn = 1""".format(
+        effective_min_id=effective_min_id_alarms_1,
+        min_time_epoch=min_time_epoch,
+    )
     df_fresh_alarms_1 = pd.read_sql(select_fresh_alarms_1, engine_postgresql)
     df_fresh_alarms_1.replace("", "0").to_sql(
         "alarms_1", engine_postgresql, if_exists="append", index=False
@@ -757,18 +804,20 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     print(
         "Added {x} records to alarms_1 in Postgres!".format(
             x=df_fresh_alarms_1.shape[0]
-        )
+        ),
+        flush=True,
     )
     #   Обновление таблицы alarms_1 в Postgres. Конец
 
     #   Обновление таблицы alarms_2 в Postgres. Начало
+    print("Computing alarms_2...", flush=True)
     select_max_id_alarms_2 = """
     SELECT 
         MAX(id)
     FROM damir.alarms_2
     """
     df_max_id_alarms_2 = pd.read_sql(select_max_id_alarms_2, engine_postgresql)
-    max_id_alarms_2 = int(df_max_id_alarms_2.iloc[0].iloc[0])
+    max_id_alarms_2 = sql_max_id(df_max_id_alarms_2)
     select_fresh_alarms_2 = """
         WITH prev_rides AS (
             SELECT
@@ -778,6 +827,7 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
             FROM
                 damir.t_bike_use
             WHERE t_bike_use.id > {max_id_alarms_2}
+                AND t_bike_use.date >= {min_time_epoch}
         )
         SELECT DISTINCT ON (prev_rides.id, to_timestamp(prev_rides.date), t_bike.number)
             prev_rides.id,
@@ -796,7 +846,7 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
             AND prev_status = 7
             AND prev_prev_status = 7
         ORDER BY to_timestamp(prev_rides.date) ASC
-    """.format(max_id_alarms_2=max_id_alarms_2)
+    """.format(max_id_alarms_2=max_id_alarms_2, min_time_epoch=min_time_epoch)
     df_fresh_alarms_2 = pd.read_sql(select_fresh_alarms_2, engine_postgresql)
     df_fresh_alarms_2.replace("", "0").to_sql(
         "alarms_2", engine_postgresql, if_exists="append", index=False
@@ -804,18 +854,20 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     print(
         "Added {x} records to alarms_2 in Postgres!".format(
             x=df_fresh_alarms_2.shape[0]
-        )
+        ),
+        flush=True,
     )
     #   Обновление таблицы alarms_2 в Postgres. Конец
 
     #   Обновление таблицы alarms_3 в Postgres. Начало
+    print("Computing alarms_3...", flush=True)
     select_max_id_alarms_3 = """
     SELECT 
         MAX(id)
     FROM damir.alarms_3
     """
     df_max_id_alarms_3 = pd.read_sql(select_max_id_alarms_3, engine_postgresql)
-    max_id_alarms_3 = int(df_max_id_alarms_3.iloc[0].iloc[0])
+    max_id_alarms_3 = sql_max_id(df_max_id_alarms_3)
 
     select_fresh_alarms_3 = """
         SELECT
@@ -838,6 +890,7 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
                 LEAD(t_bike_use.bid, 2) OVER (PARTITION BY t_bike_use.uid ORDER BY t_bike_use.date) as next_next_bid
             FROM t_bike_use
             WHERE t_bike_use.id > {max_id_alarms_3}
+                AND t_bike_use.date >= {min_time_epoch}
             ) AS t_bike_use_temp
         LEFT JOIN t_bike ON t_bike_use_temp.bid = t_bike.id
         LEFT JOIN damir.t_city ON t_bike.city_id = t_city.id
@@ -846,7 +899,7 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
             AND t_bike_use_temp.next_status = 7	
             AND t_bike_use_temp.next_next_status = 3
         ORDER BY t_bike_use_temp.start_timestamp ASC
-    """.format(max_id_alarms_3=max_id_alarms_3)
+    """.format(max_id_alarms_3=max_id_alarms_3, min_time_epoch=min_time_epoch)
 
     df_fresh_alarms_3 = pd.read_sql(select_fresh_alarms_3, engine_postgresql)
     df_fresh_alarms_3.replace("", "0").to_sql(
@@ -855,18 +908,20 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     print(
         "Added {x} records to alarms_3 in Postgres!".format(
             x=df_fresh_alarms_3.shape[0]
-        )
+        ),
+        flush=True,
     )
     #   Обновление таблицы alarms_3 в Postgres. Конец
 
     #   Обновление таблицы alarms_4 в Postgres. Начало
+    print("Computing alarms_4...", flush=True)
     select_max_id_alarms_4 = """
     SELECT 
         MAX(id)
     FROM damir.alarms_4
     """
     df_max_id_alarms_4 = pd.read_sql(select_max_id_alarms_4, engine_postgresql)
-    max_id_alarms_4 = int(df_max_id_alarms_4.iloc[0].iloc[0])
+    max_id_alarms_4 = sql_max_id(df_max_id_alarms_4)
     select_fresh_alarms_4 = """
         SELECT 
             raw.*
@@ -886,10 +941,11 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
             WHERE t_ride_event_log.event = 'Canceled' 
                 AND t_bike_use.duration < 60
                 AND t_ride_event_log.id > {max_id_alarms_4}
+                AND t_ride_event_log.created >= to_timestamp({min_time_epoch})
             ) AS raw
         WHERE raw.kolvo_otmen_prev_10_min >= 3
         ORDER BY raw.created ASC
-    """.format(max_id_alarms_4=max_id_alarms_4)
+    """.format(max_id_alarms_4=max_id_alarms_4, min_time_epoch=min_time_epoch)
     df_fresh_alarms_4 = pd.read_sql(select_fresh_alarms_4, engine_postgresql)
     df_fresh_alarms_4.replace("", "0").to_sql(
         "alarms_4", engine_postgresql, if_exists="append", index=False
@@ -897,7 +953,8 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     print(
         "Added {x} records to alarms_4 in Postgres!".format(
             x=df_fresh_alarms_4.shape[0]
-        )
+        ),
+        flush=True,
     )
     #   Обновление таблицы alarms_4 в Postgres. Конец
 
@@ -1086,7 +1143,7 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     # #   Обновление таблицы alarms_5 в Postgres. Конец
 
     #   Обновление таблицы alarms_6 в Postgres. Начало
-    # Максимальный id записи в принимающей таблице
+    print("Computing alarms_6...", flush=True)
 
     select_max_id_alarms_6 = """
         SELECT 
@@ -1095,7 +1152,7 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     """
     df_max_id_alarms_6 = pd.read_sql(select_max_id_alarms_6, engine_postgresql)
 
-    max_id_alarms_6 = int(df_max_id_alarms_6.iloc[0].iloc[0])
+    max_id_alarms_6 = sql_max_id(df_max_id_alarms_6)
 
     select_fresh_alarms_6 = """
         SELECT 
@@ -1119,7 +1176,8 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
         WHERE ta.`type` = 2
             AND tb.error_status IN (0, 2, 7)
             AND ta.id > {max_id_alarms_6}
-    """.format(max_id_alarms_6=max_id_alarms_6)
+            AND ta.created >= DATE_SUB(NOW(), INTERVAL {lookback_days} DAY)
+    """.format(max_id_alarms_6=max_id_alarms_6, lookback_days=lookback_days)
 
     df_fresh_alarms_6 = pd.read_sql(select_fresh_alarms_6, engine_mysql)
 
@@ -1131,7 +1189,8 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     print(
         "Added {x} records to alarms_6 in Postgres!".format(
             x=df_fresh_alarms_6.shape[0]
-        )
+        ),
+        flush=True,
     )
     #   Обновление таблицы alarms_6 в Postgres. Конец
 
