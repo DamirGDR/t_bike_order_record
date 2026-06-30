@@ -43,7 +43,7 @@ def is_telegram_send_enabled() -> bool:
 
 
 def get_etl_batch_size() -> int:
-    return int(os.environ.get("etl_batch_size", "10000"))
+    return int(os.environ.get("etl_batch_size", "25000"))
 
 
 def get_etl_max_batches_per_run() -> int | None:
