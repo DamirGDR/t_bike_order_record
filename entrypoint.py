@@ -210,7 +210,9 @@ ORDER_RECORD_COPY_SQL = (
 
 def copy_t_bike_order_record_batch(
     engine_postgresql: sa.Engine, df: pd.DataFrame
-) -> None:
+) -> dict[str, float]:
+    """Bulk-load a batch via COPY. Returns timing breakdown (seconds) and csv_mb."""
+    t0 = time.monotonic()
     payload = df.loc[:, ORDER_RECORD_COPY_COLUMNS].copy()
     payload["add_time"] = pd.to_datetime(payload["add_time"]).dt.strftime(
         "%Y-%m-%d %H:%M:%S.%f"
@@ -231,14 +233,41 @@ def copy_t_bike_order_record_batch(
         doublequote=True,
     )
     data = buffer.getvalue()
+    csv_seconds = time.monotonic() - t0
+    csv_mb = len(data.encode("utf-8")) / (1024 * 1024)
     if not data:
-        return
+        return {
+            "csv_s": csv_seconds,
+            "pg_copy_s": 0.0,
+            "commit_s": 0.0,
+            "csv_mb": 0.0,
+        }
 
-    with engine_postgresql.begin() as conn:
-        raw_conn = conn.connection.driver_connection
-        with raw_conn.cursor() as cur:
-            with cur.copy(ORDER_RECORD_COPY_SQL) as copy:
-                copy.write(data)
+    pg_copy_s = 0.0
+    commit_s = 0.0
+    with engine_postgresql.connect() as conn:
+        trans = conn.begin()
+        try:
+            conn.execute(sa.text("SET LOCAL synchronous_commit TO OFF"))
+            copy_started = time.monotonic()
+            raw_conn = conn.connection.driver_connection
+            with raw_conn.cursor() as cur:
+                with cur.copy(ORDER_RECORD_COPY_SQL) as copy:
+                    copy.write(data)
+            pg_copy_s = time.monotonic() - copy_started
+            commit_started = time.monotonic()
+            trans.commit()
+            commit_s = time.monotonic() - commit_started
+        except Exception:
+            trans.rollback()
+            raise
+
+    return {
+        "csv_s": csv_seconds,
+        "pg_copy_s": pg_copy_s,
+        "commit_s": commit_s,
+        "csv_mb": csv_mb,
+    }
 
 
 # def type_stavka(df):
@@ -512,7 +541,7 @@ def main():
         prep_seconds = time.monotonic() - prep_started
 
         write_started = time.monotonic()
-        copy_t_bike_order_record_batch(engine_postgresql, df_batch)
+        copy_stats = copy_t_bike_order_record_batch(engine_postgresql, df_batch)
         write_seconds = time.monotonic() - write_started
 
         batch_count = len(df_batch)
@@ -520,7 +549,9 @@ def main():
         total_added += batch_count
         print(
             f"t_bike_order_record: batch {batch_num}, +{batch_count} rows, up to id={last_id} "
-            f"(read={read_seconds:.1f}s prep={prep_seconds:.1f}s write={write_seconds:.1f}s)",
+            f"(read={read_seconds:.1f}s prep={prep_seconds:.1f}s write={write_seconds:.1f}s "
+            f"csv={copy_stats['csv_s']:.1f}s pg_copy={copy_stats['pg_copy_s']:.1f}s "
+            f"commit={copy_stats['commit_s']:.1f}s size={copy_stats['csv_mb']:.1f}MB)",
             flush=True,
         )
 
