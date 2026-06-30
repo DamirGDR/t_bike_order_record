@@ -29,6 +29,7 @@ def get_chat_id() -> str:
     res = os.environ["chat_id"]
     return res
 
+
 def get_google_creds() -> str:
     url = os.environ["google_service_account_json"]
     return url
@@ -39,20 +40,28 @@ def is_telegram_send_enabled() -> bool:
 
 
 def get_etl_batch_size() -> int:
-    return int(os.environ.get("etl_batch_size", "10000"))
+    return int(os.environ.get("etl_batch_size", "50000"))
 
 
 def get_etl_max_batches_per_run() -> int | None:
-    value = os.environ.get("etl_max_batches_per_run", "10").strip()
+    value = os.environ.get("etl_max_batches_per_run", "").strip()
     if not value:
         return None
     return int(value)
 
 
-def should_skip_alarms(order_record_backlog_remaining: bool) -> bool:
+def get_etl_alarm_skip_threshold() -> int:
+    return int(os.environ.get("etl_alarm_skip_threshold", "100000"))
+
+
+def should_skip_alarms(
+    order_record_backlog_remaining: bool, order_records_added: int = 0
+) -> bool:
     if os.environ.get("skip_alarms", "").lower() in ("1", "true", "yes"):
         return True
-    return order_record_backlog_remaining
+    if order_record_backlog_remaining:
+        return True
+    return order_records_added >= get_etl_alarm_skip_threshold()
 
 
 def sql_max_id(df: pd.DataFrame) -> int:
@@ -68,17 +77,25 @@ def prepare_order_record_df(df: pd.DataFrame) -> pd.DataFrame:
     df["content"] = df["content"].astype(str).str.replace("\x00", "", regex=False)
     return df.replace("", "0").replace("\x00", "", regex=False)
 
+
 # def type_stavka(df):
 #     if pd.isnull(df['Actual finish time']) or (df['Actual finish time'] == ''):
 #         return df['Конец дня']
 #     else:
 #         return df['Actual finish time']
 
+
 def type_stavka(df):
-    if pd.isnull(df['Actual finish time']) or (df['Actual finish time'] == ''):
-        return str(df['Конец дня'].hour) + ':' + str(df['Конец дня'].minute) + ':' + str(df['Конец дня'].second)
+    if pd.isnull(df["Actual finish time"]) or (df["Actual finish time"] == ""):
+        return (
+            str(df["Конец дня"].hour)
+            + ":"
+            + str(df["Конец дня"].minute)
+            + ":"
+            + str(df["Конец дня"].second)
+        )
     else:
-        return df['Actual finish time']
+        return df["Actual finish time"]
 
 
 def read_sheet_data_to_pandas(service, spreadsheet_id: str, range_name: str):
@@ -98,17 +115,22 @@ def read_sheet_data_to_pandas(service, spreadsheet_id: str, range_name: str):
 
     try:
         # Выполняем запрос к Sheets API для получения значений
-        result = service.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range=range_name,
-            majorDimension='ROWS' # Получаем данные по строкам
-        ).execute()
+        result = (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=spreadsheet_id,
+                range=range_name,
+                majorDimension="ROWS",  # Получаем данные по строкам
+            )
+            .execute()
+        )
 
-        values = result.get('values', [])
+        values = result.get("values", [])
 
         if not values:
             print(f"В диапазоне '{range_name}' таблицы '{spreadsheet_id}' нет данных.")
-            return pd.DataFrame() # Возвращаем пустой DataFrame
+            return pd.DataFrame()  # Возвращаем пустой DataFrame
 
         # Pandas может напрямую создать DataFrame из списка списков.
         # Обычно первая строка содержит заголовки.
@@ -122,9 +144,13 @@ def read_sheet_data_to_pandas(service, spreadsheet_id: str, range_name: str):
         else:
             # Если заголовков нет, просто создаем DataFrame из данных
             df = pd.DataFrame(values)
-            print("Предупреждение: Заголовки не обнаружены. Столбцы названы автоматически (0, 1, 2...).")
+            print(
+                "Предупреждение: Заголовки не обнаружены. Столбцы названы автоматически (0, 1, 2...)."
+            )
 
-        print(f"Данные из диапазона '{range_name}' успешно прочитаны и преобразованы в Pandas DataFrame.")
+        print(
+            f"Данные из диапазона '{range_name}' успешно прочитаны и преобразованы в Pandas DataFrame."
+        )
         return df
 
     except googleapiclient.errors.HttpError as error:
@@ -135,6 +161,7 @@ def read_sheet_data_to_pandas(service, spreadsheet_id: str, range_name: str):
     except Exception as e:
         print(f"Произошла непредвиденная ошибка: {e}")
         return None
+
 
 def get_sheets_service(service_account_file: str):
     """
@@ -148,7 +175,7 @@ def get_sheets_service(service_account_file: str):
     """
     try:
         # Определяем области доступа. Для чтения достаточно 'spreadsheets.readonly'.
-        SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+        SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 
         # Загружаем учетные данные сервисного аккаунта
         creds = google.oauth2.service_account.Credentials.from_service_account_file(
@@ -156,7 +183,7 @@ def get_sheets_service(service_account_file: str):
         )
 
         # Строим сервис Sheets API
-        service = googleapiclient.discovery.build('sheets', 'v4', credentials=creds)
+        service = googleapiclient.discovery.build("sheets", "v4", credentials=creds)
         print("Сервис Google Sheets API успешно инициализирован.")
         return service
     except Exception as e:
@@ -189,7 +216,7 @@ def main():
 
     #   Обновление таблицы t_bike в Postgres. Начало
     # Копирую t_bike
-    select_t_bike = '''SELECT
+    select_t_bike = """SELECT
                             NOW() as 'timestamp',
                             IFNULL(t_bike.id,0) AS id,
                             IFNULL(t_bike.number,0) AS number,
@@ -234,7 +261,7 @@ def main():
                             IFNULL(t_bike.ble_key,'empty') AS ble_key,
                             IFNULL(t_bike.customer_group_id,0) AS user_group_id 
                             FROM shamri.t_bike
-    '''
+    """
 
     print("Reading t_bike from MySQL...", flush=True)
     df_t_bike = pd.read_sql(select_t_bike, engine_mysql)
@@ -247,19 +274,22 @@ def main():
             connection.execute(sa.text(truncate_t_bike))
             print("Таблица t_bike успешно очищена!", flush=True)
 
-    df_t_bike.to_sql("t_bike", engine_postgresql, if_exists="append", index=False, chunksize=500)
+    df_t_bike.to_sql(
+        "t_bike", engine_postgresql, if_exists="append", index=False, chunksize=500
+    )
     print("Таблица t_bike успешно обновлена!", flush=True)
 
     #   Обновление таблицы t_bike в Postgres. Конец
 
-
     # Максимальный id записи в принимающей таблице
-    select_max_id_t_bike_order_record = '''
+    select_max_id_t_bike_order_record = """
     SELECT 
     	MAX(id)
     FROM damir.t_bike_order_record
-    '''
-    df_max_id_postgres = pd.read_sql(select_max_id_t_bike_order_record, engine_postgresql)
+    """
+    df_max_id_postgres = pd.read_sql(
+        select_max_id_t_bike_order_record, engine_postgresql
+    )
     last_id = sql_max_id(df_max_id_postgres)
     batch_size = get_etl_batch_size()
     max_batches = get_etl_max_batches_per_run()
@@ -283,7 +313,7 @@ def main():
             break
 
         batch_num += 1
-        select_fresh_t_bike_order_record_mysql = '''
+        select_fresh_t_bike_order_record_mysql = """
         SELECT 
             NOW() AS add_time,
             IFNULL(t_bike_order_record.id,0) AS id, 
@@ -299,7 +329,7 @@ def main():
             t_bike_order_record.id > {last_id}
         ORDER BY t_bike_order_record.id
         LIMIT {batch_size}
-        '''.format(last_id=last_id, batch_size=batch_size)
+        """.format(last_id=last_id, batch_size=batch_size)
 
         df_batch = pd.read_sql(select_fresh_t_bike_order_record_mysql, engine_mysql)
         if df_batch.empty:
@@ -325,14 +355,14 @@ def main():
         if batch_count < batch_size:
             break
 
-    print(f"Added {total_added} records to t_bike_order_record in Postgres!", flush=True)
-
-
+    print(
+        f"Added {total_added} records to t_bike_order_record in Postgres!", flush=True
+    )
 
     # #   Обновление таблицы t_bike_use в Postgres. Начало
     # # Максимальный id записи в принимающей таблице
     # select_max_id_t_bike_use = '''
-    # SELECT 
+    # SELECT
     # 	MAX(id)
     # FROM damir.t_bike_use
     # '''
@@ -366,7 +396,7 @@ def main():
     #             IfNULL(t_bike_use.old_duration,0) AS old_duration,
     #             IfNULL(t_bike_use.admin_id,0) AS admin_id,
     #             IfNULL(t_bike_use.update_time,0) AS update_time,
-    #             IfNULL(t_bike_use.lock_time,0) AS lock_time, 
+    #             IfNULL(t_bike_use.lock_time,0) AS lock_time,
     #             IfNULL(t_bike_use.host_id,0) AS host_id,
     #             IfNULL(t_bike_use.ride_user,0) AS ride_user,
     #             IfNULL(t_bike_use.group_ride,0) AS group_ride,
@@ -405,7 +435,7 @@ def main():
     # #   Обновление таблицы t_ride_event_log в Postgres. Начало
     # # Максимальный id записи в принимающей таблице
     # select_max_id_t_ride_event_log = '''
-    # SELECT 
+    # SELECT
     #     MAX(id)
     # FROM damir.t_ride_event_log
     # '''
@@ -419,13 +449,12 @@ def main():
     #             t_ride_event_log.ride_id,
     #             t_ride_event_log.event,
     #             t_ride_event_log.description,
-    #             t_ride_event_log.created 
+    #             t_ride_event_log.created
     #         FROM shamri.t_ride_event_log
     #         WHERE t_ride_event_log.id > {max_id_t_ride_event_log}
     #                 '''.format(max_id_t_ride_event_log=max_id_t_ride_event_log)
 
     # df_fresh_t_ride_event_log_mysql = pd.read_sql(select_fresh_t_ride_event_log_mysql, engine_mysql)
-
 
     # df_fresh_t_ride_event_log_mysql.replace('', '0').to_sql("t_ride_event_log", engine_postgresql, if_exists="append", index=False)
     # print('Added {x} records to t_ride_event_log in Postgres!'.format(x = df_fresh_t_ride_event_log_mysql.shape[0]))
@@ -433,16 +462,18 @@ def main():
     # #   Обновление таблицы t_ride_event_log в Postgres. Конец
 
     #   Обновление таблицы t_admin_log в Postgres. Начало
-    select_max_id_t_admin_log = '''
+    select_max_id_t_admin_log = """
     SELECT 
         MAX(id)
     FROM damir.t_admin_log
-    '''
+    """
 
-    df_max_id_t_admin_log_postgres = pd.read_sql(select_max_id_t_admin_log, engine_postgresql)
+    df_max_id_t_admin_log_postgres = pd.read_sql(
+        select_max_id_t_admin_log, engine_postgresql
+    )
 
     max_id_t_admin_log = int(df_max_id_t_admin_log_postgres.iloc[0].iloc[0])
-    select_fresh_t_admin_log_mysql = '''
+    select_fresh_t_admin_log_mysql = """
             SELECT
                 IfNULL(t_admin_log.id,0) AS id,
                 IfNULL(t_admin_log.admin_id,0) AS admin_id,
@@ -452,19 +483,28 @@ def main():
                 NOW() AS add_time
             FROM shamri.t_admin_log
             WHERE t_admin_log.id > {max_id_t_admin_log}
-                    '''.format(max_id_t_admin_log=max_id_t_admin_log)
+                    """.format(max_id_t_admin_log=max_id_t_admin_log)
 
-    df_fresh_t_admin_log_mysql = pd.read_sql(select_fresh_t_admin_log_mysql, engine_mysql)
-    df_fresh_t_admin_log_mysql['date'] = pd.to_datetime(df_fresh_t_admin_log_mysql['date'])
-    df_fresh_t_admin_log_mysql.replace('', '0').to_sql("t_admin_log", engine_postgresql, if_exists="append",
-                                                       index=False)
-    print('Added {x} records to t_admin_log in Postgres!'.format(x=df_fresh_t_admin_log_mysql.shape[0]))
+    df_fresh_t_admin_log_mysql = pd.read_sql(
+        select_fresh_t_admin_log_mysql, engine_mysql
+    )
+    df_fresh_t_admin_log_mysql["date"] = pd.to_datetime(
+        df_fresh_t_admin_log_mysql["date"]
+    )
+    df_fresh_t_admin_log_mysql.replace("", "0").to_sql(
+        "t_admin_log", engine_postgresql, if_exists="append", index=False
+    )
+    print(
+        "Added {x} records to t_admin_log in Postgres!".format(
+            x=df_fresh_t_admin_log_mysql.shape[0]
+        )
+    )
     #   Обновление таблицы t_admin_log в Postgres. Конец
 
     # #   Обновление таблицы t_payment_details в Postgres. Начало
     # #   Максимальный id записи в принимающей таблице
     # select_max_id_t_payment_details = '''
-    #     SELECT 
+    #     SELECT
     #         MAX(id)
     #     FROM damir.t_payment_details
     # '''
@@ -473,7 +513,7 @@ def main():
     # max_id_t_payment_details = int(df_max_id_t_payment_details_postgres.iloc[0].iloc[0])
 
     # select_fresh_t_payment_details_mysql = '''
-    #         SELECT 
+    #         SELECT
     #             NOW() AS add_time ,
     #             IFNULL(tpd.id, 0) AS id ,
     #             IFNULL(tpd.user_id, 0) AS user_id ,
@@ -505,7 +545,7 @@ def main():
     #             IFNULL(tpd.bike_discount_amount, 0) AS bike_discount_amount,
     #             IFNULL(tpd.bike_discount_value, 0) AS bike_discount_value,
     #             IFNULL(tpd.bike_discount_type, 0) AS bike_discount_type
-    #         FROM shamri.t_payment_details tpd 
+    #         FROM shamri.t_payment_details tpd
     #         WHERE tpd.id > {max_id_t_payment_details}
     #                 '''.format(max_id_t_payment_details=max_id_t_payment_details)
     # df_fresh_t_payment_details_mysql = pd.read_sql(select_fresh_t_payment_details_mysql, engine_mysql)
@@ -514,9 +554,8 @@ def main():
     # print('Added {x} records to t_payment_details in Postgres!'.format(x=df_fresh_t_payment_details_mysql.shape[0]))
     # #   Обновление таблицы t_payment_details в Postgres. Конец
 
-
     #   Обновление таблицы alarms_1 в Postgres. Начало
-    skip_alarms = should_skip_alarms(order_record_backlog_remaining)
+    skip_alarms = should_skip_alarms(order_record_backlog_remaining, total_added)
     if skip_alarms:
         print("Skipping alarms and telegram notifications for this run", flush=True)
 
@@ -527,14 +566,14 @@ def main():
 
 
 def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
-    select_max_id_alarms_1 = '''
+    select_max_id_alarms_1 = """
     SELECT 
         MAX(id)
     FROM damir.alarms_1
-    '''
+    """
     df_max_id_alarms_1 = pd.read_sql(select_max_id_alarms_1, engine_postgresql)
     max_id_alarms_1 = int(df_max_id_alarms_1.iloc[0].iloc[0])
-    select_fresh_alarms_1 = '''WITH detected_combinations AS (
+    select_fresh_alarms_1 = """WITH detected_combinations AS (
                     SELECT
                         id,
                         imei,
@@ -710,21 +749,27 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
                     LEFT JOIN damir.t_bike ON alarm_tab.imei = t_bike.imei
                     LEFT JOIN damir.t_city ON t_bike.city_id = t_city.id
                     ORDER BY alarm_tab.detection_time ASC) AS res_tab
-                    WHERE res_tab.rn = 1'''.format(max_id_alarms_1, max_id_alarms_1)
+                    WHERE res_tab.rn = 1""".format(max_id_alarms_1, max_id_alarms_1)
     df_fresh_alarms_1 = pd.read_sql(select_fresh_alarms_1, engine_postgresql)
-    df_fresh_alarms_1.replace('', '0').to_sql("alarms_1", engine_postgresql, if_exists="append", index=False)
-    print('Added {x} records to alarms_1 in Postgres!'.format(x=df_fresh_alarms_1.shape[0]))
+    df_fresh_alarms_1.replace("", "0").to_sql(
+        "alarms_1", engine_postgresql, if_exists="append", index=False
+    )
+    print(
+        "Added {x} records to alarms_1 in Postgres!".format(
+            x=df_fresh_alarms_1.shape[0]
+        )
+    )
     #   Обновление таблицы alarms_1 в Postgres. Конец
 
     #   Обновление таблицы alarms_2 в Postgres. Начало
-    select_max_id_alarms_2 = '''
+    select_max_id_alarms_2 = """
     SELECT 
         MAX(id)
     FROM damir.alarms_2
-    '''
+    """
     df_max_id_alarms_2 = pd.read_sql(select_max_id_alarms_2, engine_postgresql)
     max_id_alarms_2 = int(df_max_id_alarms_2.iloc[0].iloc[0])
-    select_fresh_alarms_2 = '''
+    select_fresh_alarms_2 = """
         WITH prev_rides AS (
             SELECT
                 t_bike_use.*,
@@ -751,22 +796,28 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
             AND prev_status = 7
             AND prev_prev_status = 7
         ORDER BY to_timestamp(prev_rides.date) ASC
-    '''.format(max_id_alarms_2=max_id_alarms_2)
+    """.format(max_id_alarms_2=max_id_alarms_2)
     df_fresh_alarms_2 = pd.read_sql(select_fresh_alarms_2, engine_postgresql)
-    df_fresh_alarms_2.replace('', '0').to_sql("alarms_2", engine_postgresql, if_exists="append", index=False)
-    print('Added {x} records to alarms_2 in Postgres!'.format(x=df_fresh_alarms_2.shape[0]))
+    df_fresh_alarms_2.replace("", "0").to_sql(
+        "alarms_2", engine_postgresql, if_exists="append", index=False
+    )
+    print(
+        "Added {x} records to alarms_2 in Postgres!".format(
+            x=df_fresh_alarms_2.shape[0]
+        )
+    )
     #   Обновление таблицы alarms_2 в Postgres. Конец
 
     #   Обновление таблицы alarms_3 в Postgres. Начало
-    select_max_id_alarms_3 = '''
+    select_max_id_alarms_3 = """
     SELECT 
         MAX(id)
     FROM damir.alarms_3
-    '''
+    """
     df_max_id_alarms_3 = pd.read_sql(select_max_id_alarms_3, engine_postgresql)
     max_id_alarms_3 = int(df_max_id_alarms_3.iloc[0].iloc[0])
 
-    select_fresh_alarms_3 = '''
+    select_fresh_alarms_3 = """
         SELECT
             t_bike_use_temp.id,
             t_bike_use_temp.start_timestamp ,
@@ -795,22 +846,28 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
             AND t_bike_use_temp.next_status = 7	
             AND t_bike_use_temp.next_next_status = 3
         ORDER BY t_bike_use_temp.start_timestamp ASC
-    '''.format(max_id_alarms_3=max_id_alarms_3)
+    """.format(max_id_alarms_3=max_id_alarms_3)
 
     df_fresh_alarms_3 = pd.read_sql(select_fresh_alarms_3, engine_postgresql)
-    df_fresh_alarms_3.replace('', '0').to_sql("alarms_3", engine_postgresql, if_exists="append", index=False)
-    print('Added {x} records to alarms_3 in Postgres!'.format(x=df_fresh_alarms_3.shape[0]))
+    df_fresh_alarms_3.replace("", "0").to_sql(
+        "alarms_3", engine_postgresql, if_exists="append", index=False
+    )
+    print(
+        "Added {x} records to alarms_3 in Postgres!".format(
+            x=df_fresh_alarms_3.shape[0]
+        )
+    )
     #   Обновление таблицы alarms_3 в Postgres. Конец
 
     #   Обновление таблицы alarms_4 в Postgres. Начало
-    select_max_id_alarms_4 = '''
+    select_max_id_alarms_4 = """
     SELECT 
         MAX(id)
     FROM damir.alarms_4
-    '''
+    """
     df_max_id_alarms_4 = pd.read_sql(select_max_id_alarms_4, engine_postgresql)
     max_id_alarms_4 = int(df_max_id_alarms_4.iloc[0].iloc[0])
-    select_fresh_alarms_4 = '''
+    select_fresh_alarms_4 = """
         SELECT 
             raw.*
         FROM 
@@ -832,12 +889,17 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
             ) AS raw
         WHERE raw.kolvo_otmen_prev_10_min >= 3
         ORDER BY raw.created ASC
-    '''.format(max_id_alarms_4=max_id_alarms_4)
+    """.format(max_id_alarms_4=max_id_alarms_4)
     df_fresh_alarms_4 = pd.read_sql(select_fresh_alarms_4, engine_postgresql)
-    df_fresh_alarms_4.replace('', '0').to_sql("alarms_4", engine_postgresql, if_exists="append", index=False)
-    print('Added {x} records to alarms_4 in Postgres!'.format(x=df_fresh_alarms_4.shape[0]))
+    df_fresh_alarms_4.replace("", "0").to_sql(
+        "alarms_4", engine_postgresql, if_exists="append", index=False
+    )
+    print(
+        "Added {x} records to alarms_4 in Postgres!".format(
+            x=df_fresh_alarms_4.shape[0]
+        )
+    )
     #   Обновление таблицы alarms_4 в Postgres. Конец
-
 
     # # Выгрузка гугл таблиц(Workers_city_role и График работ) в БД для alarms_5. Начало
     #
@@ -924,7 +986,7 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
 
     # # Максимальный id записи в принимающей таблице
     # select_max_id_alarms_5 = '''
-    #     SELECT 
+    #     SELECT
     #         MAX(id)
     #     FROM damir.alarms_5
     # '''
@@ -947,20 +1009,20 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     #                 --COALESCE(res_tab."Actual finish time", '23:59:59') AS "Actual finish time",
     #                 --concat(to_char(current_date, 'YYYY-MM-DD'), ' ', COALESCE(res_tab."Actual finish time", '23:59:59')) AS "Actual finish time" ,
     #                 to_timestamp(concat(to_char(current_date, 'YYYY-MM-DD'), ' ', COALESCE(res_tab."Actual finish time", '23:59:59')), 'YYYY-MM-DD HH24:MI:SS') AS "Actual finish time"
-    #             FROM damir.workers_city_role wcr  
+    #             FROM damir.workers_city_role wcr
     #             LEFT JOIN (
-    #                 SELECT 
+    #                 SELECT
     #                     res_tab."Date" ,
     #                     res_tab."Worker id" ,
     #                     res_tab."Worker username" ,
-    #                     wcr.nickname , 
+    #                     wcr.nickname ,
     #                     wcr."role" ,
     #                     wcr.city ,
     #                     res_tab."Actual start time" ,
     #                     res_tab."Actual finish time"
-    #                 FROM 
+    #                 FROM
     #                     (
-    #                     SELECT 
+    #                     SELECT
     #                         grg."Date"::date ,
     #                         grg."Worker id" ,
     #                         grg."Worker username",
@@ -972,15 +1034,15 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     #                     WHERE grg."Date"::date = CURRENT_DATE
     #                         AND grg."Actual start time" != '00:00:70'
     #                         ) AS res_tab
-    #                 LEFT JOIN  workers_city_role wcr ON res_tab."Worker id" = wcr.id  
+    #                 LEFT JOIN  workers_city_role wcr ON res_tab."Worker id" = wcr.id
     #                 WHERE res_tab.rn = 1
-    #             ) AS res_tab ON wcr.id = res_tab."Worker id" 
+    #             ) AS res_tab ON wcr.id = res_tab."Worker id"
     #         )
     #     SELECT DISTINCT ON (res_tab."Worker id", res_tab."date", res_tab."number", res_tab."Worker username")
     #         res_tab.*
     #     FROM
     #         (
-    #             SELECT 
+    #             SELECT
     #                 res_tab.add_time + INTERVAL '3 hours' AS add_time,
     #                 res_tab.id ,
     #                 res_tab."Worker id" ,
@@ -991,7 +1053,7 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     #                 res_tab."Worker nickname" ,
     #                 res_tab."Working_grafik"
     #                 --res_tab.rn
-    #             FROM 
+    #             FROM
     #                 (
     #                 SELECT
     #                     now() AS add_time ,
@@ -1007,11 +1069,11 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     #                     --grafik_rabot."Actual start time" ,
     #                     --grafik_rabot."Actual finish time"
     #                 FROM damir.t_admin_log tal
-    #                 LEFT JOIN damir.t_bike tb ON CONCAT('M', LPAD(tal.data_id::text, 4, '0'), 'W' ) = tb."number" 
+    #                 LEFT JOIN damir.t_bike tb ON CONCAT('M', LPAD(tal.data_id::text, 4, '0'), 'W' ) = tb."number"
     #                 LEFT JOIN damir.t_city tc ON tb.city_id = tc.id
     #                 LEFT JOIN grafik_rabot ON tal.admin_id = grafik_rabot."Worker id"::integer
-    #                 WHERE tal.func_id = 70 
-    #                     AND tal.id > {max_id_alarms_5} 
+    #                 WHERE tal.func_id = 70
+    #                     AND tal.id > {max_id_alarms_5}
     #                     ) AS res_tab
     #             WHERE res_tab.rn = 1
     #             ) AS res_tab
@@ -1026,16 +1088,16 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     #   Обновление таблицы alarms_6 в Postgres. Начало
     # Максимальный id записи в принимающей таблице
 
-    select_max_id_alarms_6 = '''
+    select_max_id_alarms_6 = """
         SELECT 
             MAX(id)
         FROM damir.alarms_6
-    '''
+    """
     df_max_id_alarms_6 = pd.read_sql(select_max_id_alarms_6, engine_postgresql)
 
     max_id_alarms_6 = int(df_max_id_alarms_6.iloc[0].iloc[0])
 
-    select_fresh_alarms_6 = '''
+    select_fresh_alarms_6 = """
         SELECT 
             now() + INTERVAL 1 HOUR AS add_time ,
             ta.id ,
@@ -1057,201 +1119,271 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
         WHERE ta.`type` = 2
             AND tb.error_status IN (0, 2, 7)
             AND ta.id > {max_id_alarms_6}
-    '''.format(max_id_alarms_6=max_id_alarms_6)
+    """.format(max_id_alarms_6=max_id_alarms_6)
 
     df_fresh_alarms_6 = pd.read_sql(select_fresh_alarms_6, engine_mysql)
 
     # Загрузка новых тревог Выезд за пределы сервиса в Postgres
 
-    df_fresh_alarms_6.replace('', '0').to_sql("alarms_6", engine_postgresql, if_exists="append", index=False)
-    print('Added {x} records to alarms_6 in Postgres!'.format(x=df_fresh_alarms_6.shape[0]))
+    df_fresh_alarms_6.replace("", "0").to_sql(
+        "alarms_6", engine_postgresql, if_exists="append", index=False
+    )
+    print(
+        "Added {x} records to alarms_6 in Postgres!".format(
+            x=df_fresh_alarms_6.shape[0]
+        )
+    )
     #   Обновление таблицы alarms_6 в Postgres. Конец
 
     # Отправка alarms_1 в тг
     TOKEN = get_token()
     chat_id = get_chat_id()
     if not is_telegram_send_enabled():
-        print("send_telegram не включён: уведомления не отправляются, записи будут помечены как отправленные")
+        print(
+            "send_telegram не включён: уведомления не отправляются, записи будут помечены как отправленные"
+        )
 
-    select_unsent_records = '''
+    select_unsent_records = """
     SELECT *
     FROM damir.alarms_1
     WHERE is_message_sent IS NULL OR is_message_sent = ''
-    '''
+    """
     df_unsent_records = pd.read_sql(select_unsent_records, engine_postgresql)
 
-    for id in df_unsent_records['id']:
-        sim_number = df_unsent_records.loc[(df_unsent_records['id'] == id), 'number'].iloc[0]
-        city = df_unsent_records.loc[(df_unsent_records['id'] == id), 'city'].iloc[0]
+    for id in df_unsent_records["id"]:
+        sim_number = df_unsent_records.loc[
+            (df_unsent_records["id"] == id), "number"
+        ].iloc[0]
+        city = df_unsent_records.loc[(df_unsent_records["id"] == id), "city"].iloc[0]
 
-        message_1 = 'https://www.google.com/maps?q=' + \
-                    str(df_unsent_records.loc[(df_unsent_records['id'] == id), 'lat'].iloc[0]) + \
-                    ',' + \
-                    str(df_unsent_records.loc[(df_unsent_records['id'] == id), 'lng'].iloc[0])
-        message_1_ = 'https://maps.google.com/maps?q=' + \
-                     str(df_unsent_records.loc[(df_unsent_records['id'] == id), 'lat'].iloc[0]) + \
-                     ',' + \
-                     str(df_unsent_records.loc[(df_unsent_records['id'] == id), 'lng'].iloc[0]) + \
-                     '&ll=' + \
-                     str(df_unsent_records.loc[(df_unsent_records['id'] == id), 'lat'].iloc[0]) + \
-                     ',' + \
-                     str(df_unsent_records.loc[(df_unsent_records['id'] == id), 'lng'].iloc[0]) + \
-                     '&z=16'
-        message_2 = f'Внимание! Несанкционированное передвижение. Номер самоката: {sim_number}. Город: {city}'.format(sim_number, city)
+        message_1 = (
+            "https://www.google.com/maps?q="
+            + str(df_unsent_records.loc[(df_unsent_records["id"] == id), "lat"].iloc[0])
+            + ","
+            + str(df_unsent_records.loc[(df_unsent_records["id"] == id), "lng"].iloc[0])
+        )
+        message_1_ = (
+            "https://maps.google.com/maps?q="
+            + str(df_unsent_records.loc[(df_unsent_records["id"] == id), "lat"].iloc[0])
+            + ","
+            + str(df_unsent_records.loc[(df_unsent_records["id"] == id), "lng"].iloc[0])
+            + "&ll="
+            + str(df_unsent_records.loc[(df_unsent_records["id"] == id), "lat"].iloc[0])
+            + ","
+            + str(df_unsent_records.loc[(df_unsent_records["id"] == id), "lng"].iloc[0])
+            + "&z=16"
+        )
+        message_2 = f"Внимание! Несанкционированное передвижение. Номер самоката: {sim_number}. Город: {city}".format(
+            sim_number, city
+        )
         print(message_1)
         print(message_2)
         send_message_tg(TOKEN, chat_id, message_1)
         send_message_tg(TOKEN, chat_id, message_2)
-        insert_example = '''
+        insert_example = """
                     UPDATE damir.alarms_1
                     SET is_message_sent = '1'
                     WHERE id = {id}
-                    '''.format(id=str(id))
-
+                    """.format(id=str(id))
 
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
                 connection.execute(sa.text(insert_example))
 
     #   ТЗ 2 тг
-    select_unsent_records_2 = '''
+    select_unsent_records_2 = """
     SELECT *
     FROM damir.alarms_2
     WHERE is_message_sent IS NULL OR is_message_sent = ''
-    '''
+    """
     df_unsent_records_2 = pd.read_sql(select_unsent_records_2, engine_postgresql)
 
-    for id in df_unsent_records_2['id']:
-        sim_number = df_unsent_records_2.loc[(df_unsent_records_2['id'] == id), 'number'].iloc[0]
-        city = df_unsent_records_2.loc[(df_unsent_records_2['id'] == id), 'city'].iloc[0]
+    for id in df_unsent_records_2["id"]:
+        sim_number = df_unsent_records_2.loc[
+            (df_unsent_records_2["id"] == id), "number"
+        ].iloc[0]
+        city = df_unsent_records_2.loc[(df_unsent_records_2["id"] == id), "city"].iloc[
+            0
+        ]
 
-
-        message_1 = 'Внимание! Самокат не запустился более 3 раз. Номер самоката: ' + \
-                    str(sim_number) + '. Город: ' + str(city)
+        message_1 = (
+            "Внимание! Самокат не запустился более 3 раз. Номер самоката: "
+            + str(sim_number)
+            + ". Город: "
+            + str(city)
+        )
         print(message_1)
         send_message_tg(TOKEN, chat_id, message_1)
-        insert_example = '''
+        insert_example = """
                     UPDATE damir.alarms_2
                     SET is_message_sent = '1'
                     WHERE id = {id}
-                    '''.format(id=str(id))
+                    """.format(id=str(id))
 
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
                 connection.execute(sa.text(insert_example))
 
     #   ТЗ 3 тг
-    select_unsent_records_3 = '''
+    select_unsent_records_3 = """
     SELECT *
     FROM damir.alarms_3
     WHERE is_message_sent IS NULL OR is_message_sent = ''
-    '''
+    """
     df_unsent_records_3 = pd.read_sql(select_unsent_records_3, engine_postgresql)
 
-    for id in df_unsent_records_3['id']:
-        sim_number = df_unsent_records_3.loc[(df_unsent_records_3['id'] == id), 'number'].iloc[0]
-        city = df_unsent_records_3.loc[(df_unsent_records_3['id'] == id), 'city'].iloc[0]
+    for id in df_unsent_records_3["id"]:
+        sim_number = df_unsent_records_3.loc[
+            (df_unsent_records_3["id"] == id), "number"
+        ].iloc[0]
+        city = df_unsent_records_3.loc[(df_unsent_records_3["id"] == id), "city"].iloc[
+            0
+        ]
 
-        message_1 = 'Внимание! Замена самоката пользователем после неуспешного запуска. Номер самоката: ' + \
-                    str(sim_number) + '. Город: ' + str(city)
+        message_1 = (
+            "Внимание! Замена самоката пользователем после неуспешного запуска. Номер самоката: "
+            + str(sim_number)
+            + ". Город: "
+            + str(city)
+        )
         print(message_1)
         send_message_tg(TOKEN, chat_id, message_1)
-        insert_example = '''
+        insert_example = """
                     UPDATE damir.alarms_3
                     SET is_message_sent = '1'
                     WHERE id = {id}
-                    '''.format(id=str(id))
+                    """.format(id=str(id))
 
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
                 connection.execute(sa.text(insert_example))
 
     #   ТЗ 4 тг
-    select_unsent_records_4 = '''
+    select_unsent_records_4 = """
     SELECT *
     FROM damir.alarms_4
     WHERE is_message_sent IS NULL OR is_message_sent = ''
-    '''
+    """
     df_unsent_records_4 = pd.read_sql(select_unsent_records_4, engine_postgresql)
 
-    for id in df_unsent_records_4['id']:
-        user_id = df_unsent_records_4.loc[(df_unsent_records_4['id'] == id), 'uid'].iloc[0]
+    for id in df_unsent_records_4["id"]:
+        user_id = df_unsent_records_4.loc[
+            (df_unsent_records_4["id"] == id), "uid"
+        ].iloc[0]
 
-        message_1 = 'Внимание! Отмена поездки более 3 раз. ID пользователя: ' + \
-                    str(user_id)
+        message_1 = "Внимание! Отмена поездки более 3 раз. ID пользователя: " + str(
+            user_id
+        )
         print(message_1)
         send_message_tg(TOKEN, chat_id, message_1)
-        insert_example = '''
+        insert_example = """
                     UPDATE damir.alarms_4
                     SET is_message_sent = '1'
                     WHERE id = {id}
-                    '''.format(id=str(id))
+                    """.format(id=str(id))
 
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
                 connection.execute(sa.text(insert_example))
 
     # #   Т5  тг
-    select_unsent_records_5 = '''
+    select_unsent_records_5 = """
         SELECT *
         FROM damir.alarms_5 a5
         WHERE (is_message_sent IS NULL OR is_message_sent = '')
                 AND  a5."Working_grafik" IS FALSE
-    '''
+    """
     df_unsent_records_5 = pd.read_sql(select_unsent_records_5, engine_postgresql)
 
-    for id in df_unsent_records_5['id']:
-        city = df_unsent_records_5.loc[(df_unsent_records_5['id'] == id), 'city_bike'].iloc[0]
-        worker_id = df_unsent_records_5.loc[(df_unsent_records_5['id'] == id), 'Worker id'].iloc[0]
-        user_name = df_unsent_records_5.loc[(df_unsent_records_5['id'] == id), 'Worker username'].iloc[0]
-        nickname = df_unsent_records_5.loc[(df_unsent_records_5['id'] == id), 'Worker nickname'].iloc[0]
-        number = df_unsent_records_5.loc[(df_unsent_records_5['id'] == id), 'number'].iloc[0]
+    for id in df_unsent_records_5["id"]:
+        city = df_unsent_records_5.loc[
+            (df_unsent_records_5["id"] == id), "city_bike"
+        ].iloc[0]
+        worker_id = df_unsent_records_5.loc[
+            (df_unsent_records_5["id"] == id), "Worker id"
+        ].iloc[0]
+        user_name = df_unsent_records_5.loc[
+            (df_unsent_records_5["id"] == id), "Worker username"
+        ].iloc[0]
+        nickname = df_unsent_records_5.loc[
+            (df_unsent_records_5["id"] == id), "Worker nickname"
+        ].iloc[0]
+        number = df_unsent_records_5.loc[
+            (df_unsent_records_5["id"] == id), "number"
+        ].iloc[0]
 
-        message_1 = 'Самокат {number} используется сотрудником(username:{user_name}, nickname: {nickname}) в городе {city} в нерабочее время.' \
-            .format(number=number, user_name=user_name, nickname=nickname, city=city)
+        message_1 = "Самокат {number} используется сотрудником(username:{user_name}, nickname: {nickname}) в городе {city} в нерабочее время.".format(
+            number=number, user_name=user_name, nickname=nickname, city=city
+        )
         print(message_1)
         send_message_tg(TOKEN, chat_id, message_1)
-        insert_example = '''
+        insert_example = """
                     UPDATE damir.alarms_5
                     SET is_message_sent = '1'
                     WHERE id = {id}
                         AND "Working_grafik" IS FALSE
-                    '''.format(id=str(id))
+                    """.format(id=str(id))
 
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
                 connection.execute(sa.text(insert_example))
 
     # #   Т6  тг
-    select_unsent_records_6 = '''
+    select_unsent_records_6 = """
         SELECT *
         FROM damir.alarms_6
         WHERE is_message_sent IS NULL OR is_message_sent = ''
-    '''
+    """
     df_unsent_records_6 = pd.read_sql(select_unsent_records_6, engine_postgresql)
-    for id in df_unsent_records_6['id']:
-        sim_number = df_unsent_records_6.loc[(df_unsent_records_6['id'] == id), 'number'].iloc[0]
-        city = df_unsent_records_6.loc[(df_unsent_records_6['id'] == id), 'city'].iloc[0]
+    for id in df_unsent_records_6["id"]:
+        sim_number = df_unsent_records_6.loc[
+            (df_unsent_records_6["id"] == id), "number"
+        ].iloc[0]
+        city = df_unsent_records_6.loc[(df_unsent_records_6["id"] == id), "city"].iloc[
+            0
+        ]
 
-        message_1 = 'https://maps.google.com/maps?q=' + \
-                     str(df_unsent_records_6.loc[(df_unsent_records_6['id'] == id), 'lat'].iloc[0]) + \
-                     ',' + \
-                     str(df_unsent_records_6.loc[(df_unsent_records_6['id'] == id), 'lng'].iloc[0]) + \
-                     '&ll=' + \
-                     str(df_unsent_records_6.loc[(df_unsent_records_6['id'] == id), 'lat'].iloc[0]) + \
-                     ',' + \
-                     str(df_unsent_records_6.loc[(df_unsent_records_6['id'] == id), 'lng'].iloc[0]) + \
-                     '&z=16'
-        message_2 = f'Внимание! Выезд за пределы сервиса {sim_number}. Город: {city}'.format(sim_number, city)
+        message_1 = (
+            "https://maps.google.com/maps?q="
+            + str(
+                df_unsent_records_6.loc[(df_unsent_records_6["id"] == id), "lat"].iloc[
+                    0
+                ]
+            )
+            + ","
+            + str(
+                df_unsent_records_6.loc[(df_unsent_records_6["id"] == id), "lng"].iloc[
+                    0
+                ]
+            )
+            + "&ll="
+            + str(
+                df_unsent_records_6.loc[(df_unsent_records_6["id"] == id), "lat"].iloc[
+                    0
+                ]
+            )
+            + ","
+            + str(
+                df_unsent_records_6.loc[(df_unsent_records_6["id"] == id), "lng"].iloc[
+                    0
+                ]
+            )
+            + "&z=16"
+        )
+        message_2 = (
+            f"Внимание! Выезд за пределы сервиса {sim_number}. Город: {city}".format(
+                sim_number, city
+            )
+        )
         print(message_1)
         print(message_2)
         send_message_tg(TOKEN, chat_id, message_1)
         send_message_tg(TOKEN, chat_id, message_2)
-        insert_example = '''
+        insert_example = """
                     UPDATE damir.alarms_6
                     SET is_message_sent = '1'
                     WHERE id = {id}
-                    '''.format(id=str(id))
+                    """.format(id=str(id))
 
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
@@ -1262,7 +1394,7 @@ def _sync_checkup_from_google(engine_postgresql):
     #   Обновление таблицы checkup_last_dates_from_google в Postgres. Начало
     print("Syncing checkup_last_dates_from_google...", flush=True)
 
-    select_tb_tc = '''
+    select_tb_tc = """
         SELECT
             now()::timestamp without time zone + INTERVAL '3 hours' AS add_time,
             tb."number" ,
@@ -1271,48 +1403,68 @@ def _sync_checkup_from_google(engine_postgresql):
         FROM damir.t_bike tb
         LEFT JOIN damir.t_city tc ON tb.city_id = tc.id
         WHERE tb.error_status IN (0,7)
-    '''
+    """
     df_tb_tc = pd.read_sql(select_tb_tc, engine_postgresql)
 
-    SPREADSHEET_ID = '1BMH_HSxmK33SZvv3cIAH_SIgvm2NncSTTKI1aa7CoG8'
-    RANGE_NAME = 'Учет ремонтов в городах!A:P'
+    SPREADSHEET_ID = "1BMH_HSxmK33SZvv3cIAH_SIgvm2NncSTTKI1aa7CoG8"
+    RANGE_NAME = "Учет ремонтов в городах!A:P"
     google_service_account_json = get_google_creds()
 
-    with open('google_json.json', 'w') as fp:
+    with open("google_json.json", "w") as fp:
         json.dump(json.loads(google_service_account_json, strict=False), fp)
-    generated_json_file = './google_json.json'
-    SERVICE_ACCOUNT_FILE = './google_json.json'
+    generated_json_file = "./google_json.json"
+    SERVICE_ACCOUNT_FILE = "./google_json.json"
 
     service_account_file = generated_json_file
     sheets_service = get_sheets_service(SERVICE_ACCOUNT_FILE)
     df_uch_re = read_sheet_data_to_pandas(sheets_service, SPREADSHEET_ID, RANGE_NAME)
 
-    df_ch = df_uch_re[(df_uch_re['Код задачи'] == 'ch') & (df_uch_re['Финальный статус'] == 'ok')].copy()
-    df_ch[['day', 'month']] = df_ch['Дата'].str.split('.', expand=True)
-    df_ch['date_ch'] = pd.to_datetime(df_ch['Год'] + '-' + df_ch['month'] + '-' + df_ch['day'])
-    df_ch['rn'] = df_ch.groupby(['date_ch', 'Номер самоката'], as_index=False)['date_ch'].rank(method="first",
-                                                                                               ascending=False)
-    df_ch = df_ch[df_ch['rn'] == 1]
-    df_ch['rn1'] = df_ch.groupby(['Номер самоката'], as_index=False)['date_ch'].rank(method="first", ascending=False)
-    df_ch = df_ch[df_ch['rn1'] == 1]
-    df_ch = df_ch[['date_ch', 'Номер самоката',
-                   'Worker ID', 'Кем отремонтирован',
-                   'Причина (что пишут в чате)', 'Кем учетно',
-                   'Ремонт в рабочее время?', 'Откуда взяты запчасти',
-                   'Результат после ремонта', 'Финальный статус']]
-    df_ch = df_ch.rename(columns={'Номер самоката': 'number'})
-    df_temp = df_tb_tc.merge(df_ch, how='left', on='number')
-    df_temp['date_ch'] = df_temp['date_ch'].fillna(pd.Timestamp('2025-01-01'))
-    df_temp = df_temp.fillna(0).replace('', '0')
-    df_temp = df_temp.rename(columns={'Worker ID': 'worker_id',
-                                      'Кем отремонтирован': 'who_repaired',
-                                      'Причина (что пишут в чате)': 'chat_reason',
-                                      'Кем учетно': 'admin',
-                                      'Ремонт в рабочее время?': 'working_time',
-                                      'Откуда взяты запчасти': 'spare_parts_from',
-                                      'Результат после ремонта': 'result_after_repair',
-                                      'Финальный статус': 'status'})
-    df_temp['worker_id'] = df_temp['worker_id'].astype(int)
+    df_ch = df_uch_re[
+        (df_uch_re["Код задачи"] == "ch") & (df_uch_re["Финальный статус"] == "ok")
+    ].copy()
+    df_ch[["day", "month"]] = df_ch["Дата"].str.split(".", expand=True)
+    df_ch["date_ch"] = pd.to_datetime(
+        df_ch["Год"] + "-" + df_ch["month"] + "-" + df_ch["day"]
+    )
+    df_ch["rn"] = df_ch.groupby(["date_ch", "Номер самоката"], as_index=False)[
+        "date_ch"
+    ].rank(method="first", ascending=False)
+    df_ch = df_ch[df_ch["rn"] == 1]
+    df_ch["rn1"] = df_ch.groupby(["Номер самоката"], as_index=False)["date_ch"].rank(
+        method="first", ascending=False
+    )
+    df_ch = df_ch[df_ch["rn1"] == 1]
+    df_ch = df_ch[
+        [
+            "date_ch",
+            "Номер самоката",
+            "Worker ID",
+            "Кем отремонтирован",
+            "Причина (что пишут в чате)",
+            "Кем учетно",
+            "Ремонт в рабочее время?",
+            "Откуда взяты запчасти",
+            "Результат после ремонта",
+            "Финальный статус",
+        ]
+    ]
+    df_ch = df_ch.rename(columns={"Номер самоката": "number"})
+    df_temp = df_tb_tc.merge(df_ch, how="left", on="number")
+    df_temp["date_ch"] = df_temp["date_ch"].fillna(pd.Timestamp("2025-01-01"))
+    df_temp = df_temp.fillna(0).replace("", "0")
+    df_temp = df_temp.rename(
+        columns={
+            "Worker ID": "worker_id",
+            "Кем отремонтирован": "who_repaired",
+            "Причина (что пишут в чате)": "chat_reason",
+            "Кем учетно": "admin",
+            "Ремонт в рабочее время?": "working_time",
+            "Откуда взяты запчасти": "spare_parts_from",
+            "Результат после ремонта": "result_after_repair",
+            "Финальный статус": "status",
+        }
+    )
+    df_temp["worker_id"] = df_temp["worker_id"].astype(int)
 
     truncate_t_bike = "TRUNCATE TABLE checkup_last_dates_from_google RESTART IDENTITY;"
     with engine_postgresql.connect() as connection:
@@ -1320,7 +1472,12 @@ def _sync_checkup_from_google(engine_postgresql):
             connection.execute(sa.text(truncate_t_bike))
             print("Таблица checkup_last_dates_from_google успешно очищена!", flush=True)
 
-    df_temp.to_sql("checkup_last_dates_from_google", engine_postgresql, if_exists="append", index=False)
+    df_temp.to_sql(
+        "checkup_last_dates_from_google",
+        engine_postgresql,
+        if_exists="append",
+        index=False,
+    )
     print("Таблица checkup_last_dates_from_google успешно обновлена!", flush=True)
     #   Обновление таблицы checkup_last_dates_from_google в Postgres. Конец
 
