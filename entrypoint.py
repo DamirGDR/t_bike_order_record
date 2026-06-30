@@ -1,4 +1,5 @@
 import os
+import time
 
 import pandas as pd
 import sqlalchemy as sa
@@ -54,23 +55,55 @@ def get_etl_alarm_skip_threshold() -> int:
     return int(os.environ.get("etl_alarm_skip_threshold", "100000"))
 
 
-def get_alarms_lookback_days() -> int:
-    return int(os.environ.get("alarms_lookback_days", "1"))
+def get_alarms_lookback_minutes() -> int:
+    return int(os.environ.get("alarms_lookback_minutes", "60"))
+
+
+def get_order_record_time_at_id(engine_postgresql, record_id: int) -> int | None:
+    if record_id <= 0:
+        return None
+    df = pd.read_sql(
+        """
+        SELECT "time"
+        FROM damir.t_bike_order_record
+        WHERE id = %(record_id)s
+        """,
+        engine_postgresql,
+        params={"record_id": record_id},
+    )
+    if df.empty:
+        return None
+    value = df.iloc[0]["time"]
+    if value is None or pd.isna(value):
+        return None
+    return int(value)
 
 
 def get_order_record_floor_id_for_alarms(
-    engine_postgresql, min_time_epoch: int
+    engine_postgresql, min_time_epoch: int, stored_max_order_id: int = 0
 ) -> int:
+    """Lower bound on t_bike_order_record.id for the alarms lookback window."""
+    if stored_max_order_id > 0:
+        stored_time = get_order_record_time_at_id(
+            engine_postgresql, stored_max_order_id
+        )
+        if stored_time is not None and stored_time >= min_time_epoch:
+            return stored_max_order_id
+
     df = pd.read_sql(
         """
-        SELECT COALESCE(MIN(id), 0) AS min_id
+        SELECT id
         FROM damir.t_bike_order_record
         WHERE "time" >= %(min_time_epoch)s
+        ORDER BY id ASC
+        LIMIT 1
         """,
         engine_postgresql,
         params={"min_time_epoch": min_time_epoch},
     )
-    return int(df.iloc[0]["min_id"])
+    if df.empty:
+        return 0
+    return int(df.iloc[0]["id"])
 
 
 def effective_alarms_order_record_min_id(stored_max_id: int, floor_id: int) -> int:
@@ -589,20 +622,16 @@ def main():
 
 
 def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
-    lookback_days = get_alarms_lookback_days()
+    lookback_minutes = get_alarms_lookback_minutes()
     min_time_epoch = int(
-        (pd.Timestamp.utcnow() - pd.Timedelta(days=lookback_days)).timestamp()
+        (pd.Timestamp.utcnow() - pd.Timedelta(minutes=lookback_minutes)).timestamp()
     )
     print(
-        f"Running alarms (lookback={lookback_days}d, min_time_epoch={min_time_epoch})...",
+        f"Running alarms (lookback={lookback_minutes}m, min_time_epoch={min_time_epoch})...",
         flush=True,
     )
-    order_record_floor_id = get_order_record_floor_id_for_alarms(
-        engine_postgresql, min_time_epoch
-    )
-    print(f"alarms order_record floor_id={order_record_floor_id}", flush=True)
 
-    print("Computing alarms_1...", flush=True)
+    step_started = time.monotonic()
     select_max_id_alarms_1 = """
     SELECT 
         MAX(id)
@@ -610,14 +639,24 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     """
     df_max_id_alarms_1 = pd.read_sql(select_max_id_alarms_1, engine_postgresql)
     max_id_alarms_1 = sql_max_id(df_max_id_alarms_1)
+    print(f"alarms_1 stored_max_id={max_id_alarms_1} ({time.monotonic() - step_started:.1f}s)", flush=True)
+
+    step_started = time.monotonic()
+    order_record_floor_id = get_order_record_floor_id_for_alarms(
+        engine_postgresql, min_time_epoch, stored_max_order_id=max_id_alarms_1
+    )
     effective_min_id_alarms_1 = effective_alarms_order_record_min_id(
         max_id_alarms_1, order_record_floor_id
     )
     print(
-        f"alarms_1: stored_max_id={max_id_alarms_1}, "
-        f"effective_min_id={effective_min_id_alarms_1}",
+        f"alarms_1 floor_id={order_record_floor_id}, "
+        f"effective_min_id={effective_min_id_alarms_1} "
+        f"({time.monotonic() - step_started:.1f}s)",
         flush=True,
     )
+
+    print("Computing alarms_1...", flush=True)
+    step_started = time.monotonic()
     select_fresh_alarms_1 = """WITH detected_combinations AS (
                     SELECT
                         id,
@@ -802,8 +841,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
         "alarms_1", engine_postgresql, if_exists="append", index=False
     )
     print(
-        "Added {x} records to alarms_1 in Postgres!".format(
-            x=df_fresh_alarms_1.shape[0]
+        "Added {x} records to alarms_1 in Postgres! ({elapsed:.1f}s)".format(
+            x=df_fresh_alarms_1.shape[0],
+            elapsed=time.monotonic() - step_started,
         ),
         flush=True,
     )
@@ -811,6 +851,7 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
 
     #   Обновление таблицы alarms_2 в Postgres. Начало
     print("Computing alarms_2...", flush=True)
+    step_started = time.monotonic()
     select_max_id_alarms_2 = """
     SELECT 
         MAX(id)
@@ -1176,8 +1217,8 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
         WHERE ta.`type` = 2
             AND tb.error_status IN (0, 2, 7)
             AND ta.id > {max_id_alarms_6}
-            AND ta.created >= DATE_SUB(NOW(), INTERVAL {lookback_days} DAY)
-    """.format(max_id_alarms_6=max_id_alarms_6, lookback_days=lookback_days)
+            AND ta.created >= DATE_SUB(NOW(), INTERVAL {lookback_minutes} MINUTE)
+    """.format(max_id_alarms_6=max_id_alarms_6, lookback_minutes=lookback_minutes)
 
     df_fresh_alarms_6 = pd.read_sql(select_fresh_alarms_6, engine_mysql)
 
