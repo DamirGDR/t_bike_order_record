@@ -36,10 +36,7 @@ def get_google_creds() -> str:
 
 
 def is_telegram_send_enabled() -> bool:
-    value = os.environ.get("send_telegram", "true").strip().lower()
-    if value in ("0", "false", "no"):
-        return False
-    return True
+    return os.environ.get("send_telegram", "").lower() in ("1", "true", "yes")
 
 
 def get_etl_batch_size() -> int:
@@ -1143,7 +1140,7 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     chat_id = get_chat_id()
     if not is_telegram_send_enabled():
         print(
-            "send_telegram отключён: уведомления не отправляются, записи будут помечены как отправленные"
+            "send_telegram не включён: уведомления не отправляются, записи будут помечены как отправленные"
         )
 
     select_unsent_records = """
