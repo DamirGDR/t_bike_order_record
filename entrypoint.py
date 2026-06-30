@@ -79,8 +79,41 @@ def get_order_record_time_at_id(engine_postgresql, record_id: int) -> int | None
     return int(value)
 
 
+def find_first_order_record_id_for_time(
+    engine_postgresql, min_time_epoch: int, lo: int, hi: int
+) -> int:
+    """First id with time >= min_time_epoch; uses PK lookups only (no index on time)."""
+    if hi <= 0:
+        return 0
+
+    hi_time = get_order_record_time_at_id(engine_postgresql, hi)
+    if hi_time is None or hi_time < min_time_epoch:
+        return 0
+
+    if lo > 0:
+        lo_time = get_order_record_time_at_id(engine_postgresql, lo)
+        if lo_time is not None and lo_time >= min_time_epoch:
+            return lo
+
+    while lo < hi:
+        mid = (lo + hi) // 2
+        mid_time = get_order_record_time_at_id(engine_postgresql, mid)
+        if mid_time is None or mid_time < min_time_epoch:
+            lo = mid + 1
+        else:
+            hi = mid
+
+    final_time = get_order_record_time_at_id(engine_postgresql, lo)
+    if final_time is None or final_time < min_time_epoch:
+        return 0
+    return lo
+
+
 def get_order_record_floor_id_for_alarms(
-    engine_postgresql, min_time_epoch: int, stored_max_order_id: int = 0
+    engine_postgresql,
+    min_time_epoch: int,
+    stored_max_order_id: int = 0,
+    latest_order_record_id: int = 0,
 ) -> int:
     """Lower bound on t_bike_order_record.id for the alarms lookback window."""
     if stored_max_order_id > 0:
@@ -90,20 +123,17 @@ def get_order_record_floor_id_for_alarms(
         if stored_time is not None and stored_time >= min_time_epoch:
             return stored_max_order_id
 
-    df = pd.read_sql(
-        """
-        SELECT id
-        FROM damir.t_bike_order_record
-        WHERE "time" >= %(min_time_epoch)s
-        ORDER BY id ASC
-        LIMIT 1
-        """,
-        engine_postgresql,
-        params={"min_time_epoch": min_time_epoch},
+    if latest_order_record_id <= 0:
+        df = pd.read_sql(
+            "SELECT MAX(id) AS max_id FROM damir.t_bike_order_record",
+            engine_postgresql,
+        )
+        latest_order_record_id = sql_max_id(df)
+
+    lo = stored_max_order_id if stored_max_order_id > 0 else 1
+    return find_first_order_record_id_for_time(
+        engine_postgresql, min_time_epoch, lo, latest_order_record_id
     )
-    if df.empty:
-        return 0
-    return int(df.iloc[0]["id"])
 
 
 def effective_alarms_order_record_min_id(stored_max_id: int, floor_id: int) -> int:
@@ -385,7 +415,9 @@ def main():
             t_bike_order_record.id > {last_id}
         ORDER BY t_bike_order_record.id
         LIMIT {batch_size}
-        """.format(last_id=last_id, batch_size=batch_size)
+        """.format(
+            last_id=last_id, batch_size=batch_size
+        )
 
         df_batch = pd.read_sql(select_fresh_t_bike_order_record_mysql, engine_mysql)
         if df_batch.empty:
@@ -539,7 +571,9 @@ def main():
                 NOW() AS add_time
             FROM shamri.t_admin_log
             WHERE t_admin_log.id > {max_id_t_admin_log}
-                    """.format(max_id_t_admin_log=max_id_t_admin_log)
+                    """.format(
+        max_id_t_admin_log=max_id_t_admin_log
+    )
 
     df_fresh_t_admin_log_mysql = pd.read_sql(
         select_fresh_t_admin_log_mysql, engine_mysql
@@ -616,12 +650,16 @@ def main():
         print("Skipping alarms and telegram notifications for this run", flush=True)
 
     if not skip_alarms:
-        _run_alarms_and_telegram(engine_postgresql, engine_mysql)
+        _run_alarms_and_telegram(
+            engine_postgresql, engine_mysql, latest_order_record_id=last_id
+        )
 
     _sync_checkup_from_google(engine_postgresql)
 
 
-def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
+def _run_alarms_and_telegram(
+    engine_postgresql, engine_mysql, latest_order_record_id: int = 0
+):
     lookback_minutes = get_alarms_lookback_minutes()
     min_time_epoch = int(
         (pd.Timestamp.utcnow() - pd.Timedelta(minutes=lookback_minutes)).timestamp()
@@ -639,11 +677,17 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
     """
     df_max_id_alarms_1 = pd.read_sql(select_max_id_alarms_1, engine_postgresql)
     max_id_alarms_1 = sql_max_id(df_max_id_alarms_1)
-    print(f"alarms_1 stored_max_id={max_id_alarms_1} ({time.monotonic() - step_started:.1f}s)", flush=True)
+    print(
+        f"alarms_1 stored_max_id={max_id_alarms_1} ({time.monotonic() - step_started:.1f}s)",
+        flush=True,
+    )
 
     step_started = time.monotonic()
     order_record_floor_id = get_order_record_floor_id_for_alarms(
-        engine_postgresql, min_time_epoch, stored_max_order_id=max_id_alarms_1
+        engine_postgresql,
+        min_time_epoch,
+        stored_max_order_id=max_id_alarms_1,
+        latest_order_record_id=latest_order_record_id,
     )
     effective_min_id_alarms_1 = effective_alarms_order_record_min_id(
         max_id_alarms_1, order_record_floor_id
@@ -887,7 +931,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
             AND prev_status = 7
             AND prev_prev_status = 7
         ORDER BY to_timestamp(prev_rides.date) ASC
-    """.format(max_id_alarms_2=max_id_alarms_2, min_time_epoch=min_time_epoch)
+    """.format(
+        max_id_alarms_2=max_id_alarms_2, min_time_epoch=min_time_epoch
+    )
     df_fresh_alarms_2 = pd.read_sql(select_fresh_alarms_2, engine_postgresql)
     df_fresh_alarms_2.replace("", "0").to_sql(
         "alarms_2", engine_postgresql, if_exists="append", index=False
@@ -940,7 +986,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
             AND t_bike_use_temp.next_status = 7	
             AND t_bike_use_temp.next_next_status = 3
         ORDER BY t_bike_use_temp.start_timestamp ASC
-    """.format(max_id_alarms_3=max_id_alarms_3, min_time_epoch=min_time_epoch)
+    """.format(
+        max_id_alarms_3=max_id_alarms_3, min_time_epoch=min_time_epoch
+    )
 
     df_fresh_alarms_3 = pd.read_sql(select_fresh_alarms_3, engine_postgresql)
     df_fresh_alarms_3.replace("", "0").to_sql(
@@ -986,7 +1034,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
             ) AS raw
         WHERE raw.kolvo_otmen_prev_10_min >= 3
         ORDER BY raw.created ASC
-    """.format(max_id_alarms_4=max_id_alarms_4, min_time_epoch=min_time_epoch)
+    """.format(
+        max_id_alarms_4=max_id_alarms_4, min_time_epoch=min_time_epoch
+    )
     df_fresh_alarms_4 = pd.read_sql(select_fresh_alarms_4, engine_postgresql)
     df_fresh_alarms_4.replace("", "0").to_sql(
         "alarms_4", engine_postgresql, if_exists="append", index=False
@@ -1218,7 +1268,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
             AND tb.error_status IN (0, 2, 7)
             AND ta.id > {max_id_alarms_6}
             AND ta.created >= DATE_SUB(NOW(), INTERVAL {lookback_minutes} MINUTE)
-    """.format(max_id_alarms_6=max_id_alarms_6, lookback_minutes=lookback_minutes)
+    """.format(
+        max_id_alarms_6=max_id_alarms_6, lookback_minutes=lookback_minutes
+    )
 
     df_fresh_alarms_6 = pd.read_sql(select_fresh_alarms_6, engine_mysql)
 
@@ -1284,7 +1336,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
                     UPDATE damir.alarms_1
                     SET is_message_sent = '1'
                     WHERE id = {id}
-                    """.format(id=str(id))
+                    """.format(
+            id=str(id)
+        )
 
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
@@ -1318,7 +1372,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
                     UPDATE damir.alarms_2
                     SET is_message_sent = '1'
                     WHERE id = {id}
-                    """.format(id=str(id))
+                    """.format(
+            id=str(id)
+        )
 
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
@@ -1352,7 +1408,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
                     UPDATE damir.alarms_3
                     SET is_message_sent = '1'
                     WHERE id = {id}
-                    """.format(id=str(id))
+                    """.format(
+            id=str(id)
+        )
 
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
@@ -1380,7 +1438,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
                     UPDATE damir.alarms_4
                     SET is_message_sent = '1'
                     WHERE id = {id}
-                    """.format(id=str(id))
+                    """.format(
+            id=str(id)
+        )
 
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
@@ -1422,7 +1482,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
                     SET is_message_sent = '1'
                     WHERE id = {id}
                         AND "Working_grafik" IS FALSE
-                    """.format(id=str(id))
+                    """.format(
+            id=str(id)
+        )
 
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
@@ -1483,7 +1545,9 @@ def _run_alarms_and_telegram(engine_postgresql, engine_mysql):
                     UPDATE damir.alarms_6
                     SET is_message_sent = '1'
                     WHERE id = {id}
-                    """.format(id=str(id))
+                    """.format(
+            id=str(id)
+        )
 
         with engine_postgresql.connect() as connection:
             with connection.begin() as transaction:
