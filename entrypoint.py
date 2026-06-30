@@ -39,7 +39,10 @@ def get_google_creds() -> str:
 
 
 def is_telegram_send_enabled() -> bool:
-    return os.environ.get("send_telegram", "").lower() in ("1", "true", "yes")
+    value = os.environ.get("send_telegram", "true").strip().lower()
+    if value in ("0", "false", "no"):
+        return False
+    return value in ("1", "true", "yes")
 
 
 def get_etl_batch_size() -> int:
