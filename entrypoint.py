@@ -45,7 +45,7 @@ def get_etl_batch_size() -> int:
 
 
 def get_etl_max_batches_per_run() -> int | None:
-    value = os.environ.get("etl_max_batches_per_run", "10").strip()
+    value = os.environ.get("etl_max_batches_per_run", "").strip()
     if not value:
         return None
     return int(value)
@@ -382,9 +382,10 @@ def main():
     total_added = 0
     order_record_backlog_remaining = False
 
+    max_batches_label = max_batches if max_batches is not None else "unlimited"
     print(
         f"Syncing t_bike_order_record from id>{last_id} "
-        f"(batch_size={batch_size}, max_batches={max_batches})...",
+        f"(batch_size={batch_size}, max_batches={max_batches_label})...",
         flush=True,
     )
 
