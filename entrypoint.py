@@ -157,10 +157,35 @@ def sql_max_id(df: pd.DataFrame) -> int:
     return int(value)
 
 
-def prepare_order_record_df(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
+def build_bike_error_status_lookup(df_t_bike: pd.DataFrame) -> dict[str, int]:
+    """Maps imei -> error_status (100 when unknown), same semantics as the old MySQL JOIN."""
+    lookup_df = df_t_bike.dropna(subset=["imei"]).copy()
+    lookup_df["imei"] = (
+        lookup_df["imei"].astype(str).str.replace("\x00", "", regex=False)
+    )
+    lookup_df["error_status"] = lookup_df["_order_record_error_status"].fillna(100)
+    return (
+        lookup_df.drop_duplicates(subset="imei", keep="first")
+        .set_index("imei")["error_status"]
+        .astype(int)
+        .to_dict()
+    )
+
+
+def prepare_order_record_df(
+    df: pd.DataFrame,
+    *,
+    add_time: pd.Timestamp | None = None,
+    bike_error_by_imei: dict[str, int] | None = None,
+) -> pd.DataFrame:
     df["imei"] = df["imei"].astype(str).str.replace("\x00", "", regex=False)
     df["content"] = df["content"].astype(str).str.replace("\x00", "", regex=False)
+    if bike_error_by_imei is not None:
+        df["error_status"] = (
+            df["imei"].map(bike_error_by_imei).fillna(100).astype(int)
+        )
+    if add_time is not None:
+        df["add_time"] = add_time
     return df.replace("", "0").replace("\x00", "", regex=False)
 
 
@@ -323,6 +348,7 @@ def main():
                             IFNULL(t_bike.readpack,0) AS readpack,
                             IFNULL(t_bike.add_date, STR_TO_DATE("2024-01-01 00:00:00", "%Y-%m-%d %H:%i:%s")) AS add_date,
                             IFNULL(t_bike.error_status,0) AS error_status,
+                            t_bike.error_status AS _order_record_error_status,
                             IFNULL(t_bike.server_ip,'0.0.0.0') AS server_ip,
                             IFNULL(t_bike.bike_status,0) AS bike_status,
                             IFNULL(t_bike.sponsors_id,0) AS sponsors_id,
@@ -352,6 +378,8 @@ def main():
     print("Reading t_bike from MySQL...", flush=True)
     df_t_bike = pd.read_sql(select_t_bike, engine_mysql)
     print(f"t_bike: read {len(df_t_bike)} rows from MySQL", flush=True)
+    bike_error_by_imei = build_bike_error_status_lookup(df_t_bike)
+    df_t_bike = df_t_bike.drop(columns=["_order_record_error_status"])
 
     # Очистка таблицы в Postgres
     truncate_t_bike = "TRUNCATE TABLE t_bike RESTART IDENTITY;"
@@ -402,16 +430,13 @@ def main():
         batch_num += 1
         select_fresh_t_bike_order_record_mysql = """
         SELECT 
-            NOW() AS add_time,
             IFNULL(t_bike_order_record.id,0) AS id, 
             IFNULL(t_bike_order_record.imei,0) AS imei, 
             IFNULL(t_bike_order_record.order_id,0) AS order_id, 
             IFNULL(t_bike_order_record.`time`,0) AS `time`,
             IFNULL(t_bike_order_record.content,0) AS content, 
-            IFNULL(t_bike_order_record.`from`,0) AS `from`,
-            IFNULL(t_bike.error_status,100) AS error_status
+            IFNULL(t_bike_order_record.`from`,0) AS `from`
         FROM shamri.t_bike_order_record
-        LEFT JOIN t_bike ON t_bike_order_record.imei = t_bike.imei
         WHERE 
             t_bike_order_record.id > {last_id}
         ORDER BY t_bike_order_record.id
@@ -420,11 +445,21 @@ def main():
             last_id=last_id, batch_size=batch_size
         )
 
+        batch_started = time.monotonic()
         df_batch = pd.read_sql(select_fresh_t_bike_order_record_mysql, engine_mysql)
+        read_seconds = time.monotonic() - batch_started
         if df_batch.empty:
             break
 
-        df_batch = prepare_order_record_df(df_batch)
+        prep_started = time.monotonic()
+        df_batch = prepare_order_record_df(
+            df_batch,
+            add_time=pd.Timestamp.now(),
+            bike_error_by_imei=bike_error_by_imei,
+        )
+        prep_seconds = time.monotonic() - prep_started
+
+        write_started = time.monotonic()
         df_batch.to_sql(
             "t_bike_order_record",
             engine_postgresql,
@@ -432,12 +467,14 @@ def main():
             index=False,
             chunksize=1000,
         )
+        write_seconds = time.monotonic() - write_started
 
         batch_count = len(df_batch)
         last_id = int(df_batch["id"].max())
         total_added += batch_count
         print(
-            f"t_bike_order_record: batch {batch_num}, +{batch_count} rows, up to id={last_id}",
+            f"t_bike_order_record: batch {batch_num}, +{batch_count} rows, up to id={last_id} "
+            f"(read={read_seconds:.1f}s prep={prep_seconds:.1f}s write={write_seconds:.1f}s)",
             flush=True,
         )
 
