@@ -56,7 +56,7 @@ def get_etl_alarm_skip_threshold() -> int:
 
 
 def get_alarms_lookback_minutes() -> int:
-    return int(os.environ.get("alarms_lookback_minutes", "60"))
+    return int(os.environ.get("alarms_lookback_minutes", str(60 * 24)))
 
 
 def get_order_record_time_at_id(engine_postgresql, record_id: int) -> int | None:
