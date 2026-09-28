@@ -1,7 +1,9 @@
 import csv
 import os
 import time
+from datetime import datetime
 from io import StringIO
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import sqlalchemy as sa
@@ -10,6 +12,12 @@ import json
 import google.oauth2.service_account
 import googleapiclient.discovery
 
+from movement_shift import (
+    mark_alarm_1,
+    moving_task_assignees,
+    on_shift_worker_ids,
+    suppress_for_assignees,
+)
 from zone_exit import load_zone_exit_checks, mark_alarm_6, zone_exit_action
 
 # Секреты
@@ -358,6 +366,31 @@ def read_sheet_data_to_pandas(service, spreadsheet_id: str, range_name: str):
     except Exception as e:
         print(f"Произошла непредвиденная ошибка: {e}")
         return None
+
+
+SCHEDULE_SPREADSHEET_ID = "1dSOV9X2FV3mnOmnwWvTMJuCCZ-tVBf64DP90k3EYD90"
+SCHEDULE_RANGE = "График работ!A:L"
+
+
+def load_on_shift_worker_ids() -> set[int] | None:
+    """None means the schedule could not be read, so movement alarms are not suppressed."""
+    try:
+        info = json.loads(get_google_creds(), strict=False)
+        creds = google.oauth2.service_account.Credentials.from_service_account_info(
+            info,
+            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
+        )
+        service = googleapiclient.discovery.build(
+            "sheets", "v4", credentials=creds, cache_discovery=False
+        )
+        df = read_sheet_data_to_pandas(service, SCHEDULE_SPREADSHEET_ID, SCHEDULE_RANGE)
+    except Exception as exc:
+        print(f"График работ недоступен, тревоги перемещения не глушим: {type(exc).__name__}")
+        return None
+    if df is None:
+        return None
+    now = datetime.now(ZoneInfo("Europe/Athens"))
+    return on_shift_worker_ids(df.to_dict("records"), now)
 
 
 def get_sheets_service(service_account_file: str):
@@ -1421,11 +1454,26 @@ def _run_alarms_and_telegram(
     WHERE is_message_sent IS NULL OR is_message_sent = ''
     """
     df_unsent_records = pd.read_sql(select_unsent_records, engine_postgresql)
+    on_shift = None
+    task_assignees: dict = {}
+    if not df_unsent_records.empty:
+        on_shift = load_on_shift_worker_ids()
+        task_assignees = moving_task_assignees(
+            engine_mysql, df_unsent_records["number"].tolist()
+        )
 
     for id in df_unsent_records["id"]:
         sim_number = df_unsent_records.loc[
             (df_unsent_records["id"] == id), "number"
         ].iloc[0]
+        if suppress_for_assignees(task_assignees.get(str(sim_number), []), on_shift):
+            print(
+                f"alarms_1 id={id} scooter {sim_number} has a relocation task "
+                "assigned to someone on shift",
+                flush=True,
+            )
+            mark_alarm_1(engine_postgresql, int(id), "skipped")
+            continue
         city = df_unsent_records.loc[(df_unsent_records["id"] == id), "city"].iloc[0]
 
         message_1 = (
