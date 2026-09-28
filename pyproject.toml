@@ -16,3 +16,6 @@ dependencies = [
     "gspread==5.4.0",
     "packaging"
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

@@ -10,6 +10,8 @@ import json
 import google.oauth2.service_account
 import googleapiclient.discovery
 
+from zone_exit import load_zone_exit_checks, mark_alarm_6, zone_exit_action
+
 # Секреты
 
 
@@ -1615,61 +1617,50 @@ def _run_alarms_and_telegram(
         WHERE is_message_sent IS NULL OR is_message_sent = ''
     """
     df_unsent_records_6 = pd.read_sql(select_unsent_records_6, engine_postgresql)
+    zone_checks = load_zone_exit_checks(
+        engine_mysql, df_unsent_records_6["id"].tolist()
+    )
     for id in df_unsent_records_6["id"]:
-        sim_number = df_unsent_records_6.loc[
-            (df_unsent_records_6["id"] == id), "number"
-        ].iloc[0]
-        city = df_unsent_records_6.loc[(df_unsent_records_6["id"] == id), "city"].iloc[
-            0
-        ]
+        check = zone_checks.get(int(id))
+        action = (
+            "wait"
+            if check is None
+            else zone_exit_action(check["age_minutes"], check["outside"])
+        )
+        if action == "wait":
+            print(f"alarms_6 id={id} waiting 15m before zone recheck", flush=True)
+            continue
+        if action == "skip":
+            print(
+                f"alarms_6 id={id} scooter is back inside the service area",
+                flush=True,
+            )
+            mark_alarm_6(engine_postgresql, int(id), "skipped")
+            continue
+
+        row = df_unsent_records_6.loc[df_unsent_records_6["id"] == id].iloc[0]
+        sim_number = row["number"]
+        city = row["city"]
+        lat = check["lat"] if check["outside"] is True else row["lat"]
+        lng = check["lng"] if check["outside"] is True else row["lng"]
 
         message_1 = (
             "https://maps.google.com/maps?q="
-            + str(
-                df_unsent_records_6.loc[(df_unsent_records_6["id"] == id), "lat"].iloc[
-                    0
-                ]
-            )
+            + str(lat)
             + ","
-            + str(
-                df_unsent_records_6.loc[(df_unsent_records_6["id"] == id), "lng"].iloc[
-                    0
-                ]
-            )
+            + str(lng)
             + "&ll="
-            + str(
-                df_unsent_records_6.loc[(df_unsent_records_6["id"] == id), "lat"].iloc[
-                    0
-                ]
-            )
+            + str(lat)
             + ","
-            + str(
-                df_unsent_records_6.loc[(df_unsent_records_6["id"] == id), "lng"].iloc[
-                    0
-                ]
-            )
+            + str(lng)
             + "&z=16"
         )
-        message_2 = (
-            f"Внимание! Выезд за пределы сервиса {sim_number}. Город: {city}".format(
-                sim_number, city
-            )
-        )
+        message_2 = f"Внимание! Выезд за пределы сервиса {sim_number}. Город: {city}"
         print(message_1)
         print(message_2)
         send_message_tg(TOKEN, chat_id, message_1)
         send_message_tg(TOKEN, chat_id, message_2)
-        insert_example = """
-                    UPDATE damir.alarms_6
-                    SET is_message_sent = '1'
-                    WHERE id = {id}
-                    """.format(
-            id=str(id)
-        )
-
-        with engine_postgresql.connect() as connection:
-            with connection.begin() as transaction:
-                connection.execute(sa.text(insert_example))
+        mark_alarm_6(engine_postgresql, int(id), "1")
 
 
 def _sync_checkup_from_google(engine_postgresql):
